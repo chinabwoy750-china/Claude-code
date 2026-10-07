@@ -13,7 +13,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Claude Code using Anthropic's native installer
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
 RUN claude --version
@@ -30,7 +29,7 @@ WORKDIR /workspace
 
 EXPOSE 10000
 
-CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT:-10000}"]pace
+CMD ["sh", "-c", "uvicorn server:app --app-dir /app --host 0.0.0.0 --port ${PORT:-10000}"]app --host 0.0.0.0 --port ${PORT:-10000}"]pace
 
 EXPOSE 10000
 
