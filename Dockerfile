@@ -1,35 +1,36 @@
-FROM node:20-bookworm
+FROM python:3.12-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PORT=10000
-ENV PATH="/home/node/.local/bin:${PATH}"
+ENV PATH="/root/.local/bin:${PATH}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
-    jq \
     ca-certificates \
-    less \
-    procps \
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install Claude Code using Anthropic's current native installer.
-USER node
+# Install Claude Code using Anthropic's native installer
 RUN curl -fsSL https://claude.ai/install.sh | bash
+
 RUN claude --version
 
-USER root
 COPY requirements.txt .
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server.py .
 
-RUN mkdir -p /workspace && chown -R node:node /workspace /app
+RUN mkdir -p /workspace
 
-USER node
 WORKDIR /workspace
+
+EXPOSE 10000
+
+CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT:-10000}"]pace
 
 EXPOSE 10000
 
