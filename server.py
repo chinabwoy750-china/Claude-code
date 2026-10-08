@@ -145,12 +145,12 @@ async def run(b:Dict[str,Any],authorization:Optional[str]=Header(default=None)):
 @app.get('/v1/models')
 async def models(authorization:Optional[str]=Header(default=None)): require_app_key(authorization); return {'object':'list','data':await gateway_models()}
 @app.post('/v1/messages/count_tokens')
-async def count(request:Request,authorization:Optional[str]=Header(default=None)):
-    if authorization!='Bearer local-adapter': require_app_key(authorization)
+async def count(request:Request,authorization:Optional[str]=Header(default=None),x_api_key:Optional[str]=Header(default=None)):
+    if x_api_key!='local-adapter' and authorization!='Bearer local-adapter': require_app_key(authorization)
     b=await request.json(); return {'input_tokens':max(1,len(json.dumps(b.get('messages',[]),ensure_ascii=False))//4)}
 @app.post('/v1/messages')
-async def messages(request:Request,authorization:Optional[str]=Header(default=None)):
-    if authorization!='Bearer local-adapter': require_app_key(authorization)
+async def messages(request:Request,authorization:Optional[str]=Header(default=None),x_api_key:Optional[str]=Header(default=None)):
+    if x_api_key!='local-adapter' and authorization!='Bearer local-adapter': require_app_key(authorization)
     b=await request.json(); u=await gateway_call(b)
     if u.status_code>=400:
         try: content=u.json()
