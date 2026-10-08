@@ -95,12 +95,26 @@ async def gateway_call(body):
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as c:
         return await c.post(f'{CHINA_GPT_BASE_URL}/v1/chat/completions',headers={'Authorization':f'Bearer {CHINA_GPT_API_KEY}','Content-Type':'application/json'},json=anth_to_openai(body))
 
-async def run_claude(prompt,model):
-    env=os.environ.copy(); env['ANTHROPIC_BASE_URL']=f"http://127.0.0.1:{os.getenv('PORT','10000')}"; env['ANTHROPIC_API_KEY']='local-adapter'
-    cmd=['/home/claude/.local/bin/claude','-p',prompt,'--model',model,'--output-format','json','--permission-mode','bypassPermissions']
-    p=await asyncio.create_subprocess_exec(*cmd,cwd='/workspace',env=env,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
-    out,err=await asyncio.wait_for(p.communicate(),timeout=REQUEST_TIMEOUT)
-    return p.returncode,out.decode(errors='replace'),err.decode(errors='replace')
+async def run_claude(prompt, model):
+    env = os.environ.copy()
+    env['ANTHROPIC_BASE_URL'] = f"http://127.0.0.1:{os.getenv('PORT', '10000')}"
+    env['ANTHROPIC_API_KEY'] = 'local-adapter'
+    env['ANTHROPIC_CUSTOM_MODEL_OPTION'] = model
+    env['ANTHROPIC_CUSTOM_MODEL_OPTION_NAME'] = model
+    env['ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION'] = 'Model routed through the configured OpenAI-compatible gateway'
+    cmd = [
+        '/home/claude/.local/bin/claude',
+        '-p', prompt,
+        '--model', model,
+        '--output-format', 'json',
+        '--permission-mode', 'bypassPermissions',
+    ]
+    p = await asyncio.create_subprocess_exec(
+        *cmd, cwd='/workspace', env=env,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await asyncio.wait_for(p.communicate(), timeout=REQUEST_TIMEOUT)
+    return p.returncode, out.decode(errors='replace'), err.decode(errors='replace')
 
 class ChatBody(BaseModel): message:str; model:Optional[str]=None
 
