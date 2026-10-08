@@ -30,3 +30,17 @@ Normal messages are sent to Claude Code. Only the allowed chat ID is accepted.
 
 ## Render Start Command
 uvicorn server:app --app-dir /app --host 0.0.0.0 --port $PORT
+
+
+## Agent jobs
+Telegram:
+- 
+- 
+- 
+-  
+
+HTTP (UI session):
+-  
+-   
+
+Jobs store under . Trading is paper/research only.

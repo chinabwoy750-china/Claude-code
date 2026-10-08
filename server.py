@@ -1,5 +1,6 @@
-import asyncio, hashlib, hmac, json, os, secrets, time
-from typing import Any, Dict, Optional
+import asyncio, hashlib, hmac, json, os, secrets, time, uuid
+from pathlib import Path as FsPath
+from typing import Any, Dict, List, Optional
 from contextlib import suppress
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -21,6 +22,8 @@ app=FastAPI(title='Claude Code Web')
 telegram_task = None
 telegram_offset = None
 telegram_model_by_chat = {}
+job_worker_task = None
+JOBS_DIR = FsPath(os.getenv('JOBS_DIR', '/workspace/jobs'))
 app.mount('/static',StaticFiles(directory='/app/static'),name='static')
 
 def sig(v): return hmac.new(SESSION_SECRET.encode(),v.encode(),hashlib.sha256).hexdigest()
@@ -122,12 +125,174 @@ async def run_claude(prompt, model):
     out, err = await asyncio.wait_for(p.communicate(), timeout=REQUEST_TIMEOUT)
     return p.returncode, out.decode(errors='replace'), err.decode(errors='replace')
 
+
+# --- Agent jobs (social / affiliate / trade research) ---
+JOB_TYPES = ('social', 'affiliate', 'trade')
+
+SOCIAL_PROMPT = """You are a social content agent. Draft only. Do not post.
+Brand/niche: {brief}
+Platforms: {platforms}
+Produce a 7-day content batch.
+Output STRICT JSON:
+{{"posts":[{{"day":1,"platform":"...","hook":"...","body":"...","cta":"...","asset_type":"text|image|video_script"}}],
+ "notes":"..."}}
+Write files under the current working directory if useful. No live publishing."""
+
+AFFILIATE_PROMPT = """You are an affiliate campaign agent. Draft only. Do not buy ads or send email.
+Offer: {offer}
+Geo/audience: {audience}
+Produce angles, email drafts, social hooks, UTM ideas.
+Output STRICT JSON:
+{{"angles":["..."],"emails":[{{"subject":"...","body":"..."}}],
+ "hooks":["..."],"utms":["..."],"notes":"..."}}
+No fabricated performance claims."""
+
+TRADE_PROMPT = """You are a research desk, not a broker. No orders.
+Universe: {symbols}
+Timeframe/horizon: {horizon}
+Output STRICT JSON:
+{{"bias":"long|short|neutral","invalidation":"...","size_suggestion_pct":0.0,
+ "rationale":"...","risks":["..."],"levels":{{"entry":null,"stop":null,"target":null}}}}
+Paper-only. Never invent live account balances."""
+
+def _job_path(job_id: str) -> FsPath:
+    return JOBS_DIR / job_id
+
+def job_save(job: dict) -> None:
+    d = _job_path(job['id'])
+    d.mkdir(parents=True, exist_ok=True)
+    (d / 'job.json').write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding='utf-8')
+
+def job_load(job_id: str) -> Optional[dict]:
+    f = _job_path(job_id) / 'job.json'
+    if not f.exists():
+        return None
+    return json.loads(f.read_text(encoding='utf-8'))
+
+def job_list(limit: int = 30) -> List[dict]:
+    if not JOBS_DIR.exists():
+        return []
+    jobs = []
+    for child in sorted(JOBS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if not child.is_dir():
+            continue
+        j = job_load(child.name)
+        if j:
+            jobs.append(j)
+        if len(jobs) >= limit:
+            break
+    return jobs
+
+def build_job_prompt(job: dict) -> str:
+    t = job.get('type')
+    p = job.get('payload') or {}
+    if t == 'social':
+        return SOCIAL_PROMPT.format(
+            brief=p.get('brief') or p.get('niche') or 'general',
+            platforms=', '.join(p.get('platforms') or ['x', 'tiktok', 'instagram']),
+        )
+    if t == 'affiliate':
+        return AFFILIATE_PROMPT.format(
+            offer=p.get('offer') or 'unspecified offer',
+            audience=p.get('audience') or 'general',
+        )
+    if t == 'trade':
+        return TRADE_PROMPT.format(
+            symbols=p.get('symbols') or 'BTCUSDT',
+            horizon=p.get('horizon') or 'intraday',
+        )
+    return f"Unknown job type. Payload: {json.dumps(p)}"
+
+async def execute_job(job_id: str) -> dict:
+    job = job_load(job_id)
+    if not job:
+        raise HTTPException(404, 'job not found')
+    if job.get('status') in ('running', 'done') and job.get('status') == 'done':
+        return job
+    job['status'] = 'running'
+    job['started_at'] = time.time()
+    job_save(job)
+    model = job.get('model') or DEFAULT_MODEL
+    prompt = build_job_prompt(job)
+    # cwd into job dir so Claude Code can write artifacts there
+    job_dir = str(_job_path(job_id))
+    env = os.environ.copy()
+    env['ANTHROPIC_BASE_URL'] = f"http://127.0.0.1:{os.getenv('PORT', '10000')}"
+    env['ANTHROPIC_API_KEY'] = 'local-adapter'
+    env['ANTHROPIC_CUSTOM_MODEL_OPTION'] = model
+    env['ANTHROPIC_CUSTOM_MODEL_OPTION_NAME'] = model
+    env['ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION'] = 'Model routed through the configured OpenAI-compatible gateway'
+    cmd = [
+        '/home/claude/.local/bin/claude',
+        '-p', prompt,
+        '--model', model,
+        '--output-format', 'json',
+        '--permission-mode', 'bypassPermissions',
+    ]
+    try:
+        p = await asyncio.create_subprocess_exec(
+            *cmd, cwd=job_dir, env=env,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await asyncio.wait_for(p.communicate(), timeout=REQUEST_TIMEOUT)
+        rc = p.returncode
+        stdout = out.decode(errors='replace')
+        stderr = err.decode(errors='replace')
+    except Exception as e:
+        job['status'] = 'error'
+        job['error'] = str(e)
+        job['finished_at'] = time.time()
+        job_save(job)
+        return job
+    result = None
+    try:
+        result = json.loads(stdout).get('result')
+    except Exception:
+        result = stdout
+    job['returncode'] = rc
+    job['stdout'] = stdout[-20000:]
+    job['stderr'] = stderr[-8000:]
+    job['result'] = result
+    job['status'] = 'done' if rc == 0 else 'error'
+    job['finished_at'] = time.time()
+    job_save(job)
+    # notify operator on Telegram if configured
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_CHAT_ID:
+        summary = f"Job {job_id} [{job['type']}] → {job['status']}"
+        if isinstance(result, (dict, list)):
+            summary += '\n' + json.dumps(result, ensure_ascii=False)[:3500]
+        elif result:
+            summary += '\n' + str(result)[:3500]
+        elif stderr:
+            summary += '\n' + stderr[:3500]
+        with suppress(Exception):
+            await tg_send(str(TELEGRAM_ALLOWED_CHAT_ID), summary)
+    return job
+
+async def job_worker_loop():
+    while True:
+        try:
+            for job in job_list(50):
+                if job.get('status') == 'queued':
+                    await execute_job(job['id'])
+            await asyncio.sleep(3)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await asyncio.sleep(5)
+
+class JobCreate(BaseModel):
+    type: str
+    payload: Dict[str, Any] = {}
+    model: Optional[str] = None
+    auto_run: bool = True
+
 class ChatBody(BaseModel): message:str; model:Optional[str]=None
 
 @app.get('/',response_class=HTMLResponse)
 async def home(): return HTMLResponse(open('/app/static/index.html',encoding='utf-8').read())
 @app.get('/health')
-async def health(): return {'status':'ok','gateway':CHINA_GPT_BASE_URL,'default_model':DEFAULT_MODEL,'claude_code':os.path.exists('/home/claude/.local/bin/claude'),'web_ui':True,'telegram':bool(TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_CHAT_ID)}
+async def health(): return {'status':'ok','gateway':CHINA_GPT_BASE_URL,'default_model':DEFAULT_MODEL,'claude_code':os.path.exists('/home/claude/.local/bin/claude'),'web_ui':True,'telegram':bool(TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_CHAT_ID),'jobs':True}
 @app.post('/api/login')
 async def login(b:Dict[str,Any]):
     if not UI_PASSWORD: raise HTTPException(503,'Set UI_PASSWORD in Render environment variables first')
@@ -154,6 +319,69 @@ async def chat(b:ChatBody,r:Request):
     except: pass
     if rc!=0: raise HTTPException(500,(err.strip() or out.strip() or 'Claude Code failed')[-4000:])
     return {'ok':True,'model':model,'result':result if result is not None else out,'stderr':err[-2000:] if err else ''}
+
+@app.post('/api/jobs')
+async def api_jobs_create(b: JobCreate, r: Request):
+    require_ui(r)
+    if b.type not in JOB_TYPES:
+        raise HTTPException(400, f'type must be one of {JOB_TYPES}')
+    job_id = secrets.token_hex(8)
+    job = {
+        'id': job_id,
+        'type': b.type,
+        'payload': b.payload or {},
+        'model': b.model or DEFAULT_MODEL,
+        'status': 'queued' if b.auto_run else 'draft',
+        'created_at': time.time(),
+    }
+    job_save(job)
+    if b.auto_run:
+        asyncio.create_task(execute_job(job_id))
+    return {'ok': True, 'job': job}
+
+@app.get('/api/jobs')
+async def api_jobs_list(r: Request):
+    require_ui(r)
+    return {'jobs': job_list()}
+
+@app.get('/api/jobs/{job_id}')
+async def api_jobs_get(job_id: str, r: Request):
+    require_ui(r)
+    job = job_load(job_id)
+    if not job:
+        raise HTTPException(404, 'job not found')
+    return job
+
+@app.post('/api/jobs/{job_id}/run')
+async def api_jobs_run(job_id: str, r: Request):
+    require_ui(r)
+    job = job_load(job_id)
+    if not job:
+        raise HTTPException(404, 'job not found')
+    job['status'] = 'queued'
+    job_save(job)
+    asyncio.create_task(execute_job(job_id))
+    return {'ok': True, 'job_id': job_id}
+
+@app.post('/claude/jobs')
+async def claude_jobs_create(b: JobCreate, authorization: Optional[str] = Header(default=None)):
+    require_app_key(authorization)
+    if b.type not in JOB_TYPES:
+        raise HTTPException(400, f'type must be one of {JOB_TYPES}')
+    job_id = secrets.token_hex(8)
+    job = {
+        'id': job_id,
+        'type': b.type,
+        'payload': b.payload or {},
+        'model': b.model or DEFAULT_MODEL,
+        'status': 'queued' if b.auto_run else 'draft',
+        'created_at': time.time(),
+    }
+    job_save(job)
+    if b.auto_run:
+        asyncio.create_task(execute_job(job_id))
+    return {'ok': True, 'job': job}
+
 @app.get('/claude/version')
 async def version(authorization:Optional[str]=Header(default=None)):
     require_app_key(authorization); p=await asyncio.create_subprocess_exec('/home/claude/.local/bin/claude','--version',stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE); o,e=await p.communicate(); return {'returncode':p.returncode,'stdout':o.decode(errors='replace'),'stderr':e.decode(errors='replace')}
@@ -221,7 +449,7 @@ async def tg_models():
 async def tg_handle(chat_id,text):
     text=text.strip()
     if text=='/start':
-        await tg_send(chat_id,'Claude Code is connected. Send a message to run it.\n\nCommands:\n/models — list models\n/model — current model\n/model MODEL_ID — switch model\n/clear — reset model'); return
+        await tg_send(chat_id,'Claude Code + Agent jobs online.\n\nChat: send any message to run Claude Code.\n\nJobs:\n/job_social brief=... platforms=x,tiktok\n/job_affiliate offer=... audience=...\n/job_trade symbols=BTCUSDT horizon=intraday\n/jobs — list recent jobs\n/job JOB_ID — show job\n\nModels:\n/models /model /model ID /clear'); return
     if text=='/models': await tg_send(chat_id,await tg_models()); return
     if text=='/model': await tg_send(chat_id,'Current model:\n'+telegram_model_by_chat.get(chat_id,DEFAULT_MODEL)); return
     if text.startswith('/model '):
@@ -229,6 +457,53 @@ async def tg_handle(chat_id,text):
         if not model: await tg_send(chat_id,'Usage: /model MODEL_ID'); return
         telegram_model_by_chat[chat_id]=model; await tg_send(chat_id,'Model switched to:\n'+model); return
     if text=='/clear': telegram_model_by_chat.pop(chat_id,None); await tg_send(chat_id,'Model reset to:\n'+DEFAULT_MODEL); return
+    if text=='/jobs':
+        jobs=job_list(15)
+        if not jobs: await tg_send(chat_id,'No jobs yet.'); return
+        lines=[]
+        for j in jobs:
+            lines.append(f"{j['id']} [{j.get('type')}] {j.get('status')}")
+        await tg_send(chat_id,'Recent jobs:\n'+'\n'.join(lines)); return
+    if text.startswith('/job '):
+        jid=text[5:].strip()
+        job=job_load(jid)
+        if not job: await tg_send(chat_id,'Job not found'); return
+        body=json.dumps({k:job.get(k) for k in ('id','type','status','payload','result','error','returncode') if k in job or job.get(k) is not None}, ensure_ascii=False, indent=2)
+        await tg_send(chat_id, body[:3900]); return
+    if text.startswith('/job_social'):
+        rest=text[len('/job_social'):].strip()
+        payload={'brief': rest or 'general growth content', 'platforms': ['x','tiktok','instagram']}
+        if 'platforms=' in rest:
+            # naive parse platforms=a,b
+            for part in rest.split():
+                if part.startswith('platforms='):
+                    payload['platforms']=[x.strip() for x in part.split('=',1)[1].split(',') if x.strip()]
+                elif part.startswith('brief='):
+                    payload['brief']=part.split('=',1)[1]
+        job_id=secrets.token_hex(8)
+        job={'id':job_id,'type':'social','payload':payload,'model':telegram_model_by_chat.get(chat_id,DEFAULT_MODEL),'status':'queued','created_at':time.time()}
+        job_save(job); asyncio.create_task(execute_job(job_id))
+        await tg_send(chat_id,f'Queued social job {job_id}'); return
+    if text.startswith('/job_affiliate'):
+        rest=text[len('/job_affiliate'):].strip()
+        payload={'offer': rest or 'unspecified', 'audience': 'general'}
+        for part in rest.split():
+            if part.startswith('offer='): payload['offer']=part.split('=',1)[1]
+            if part.startswith('audience='): payload['audience']=part.split('=',1)[1]
+        job_id=secrets.token_hex(8)
+        job={'id':job_id,'type':'affiliate','payload':payload,'model':telegram_model_by_chat.get(chat_id,DEFAULT_MODEL),'status':'queued','created_at':time.time()}
+        job_save(job); asyncio.create_task(execute_job(job_id))
+        await tg_send(chat_id,f'Queued affiliate job {job_id}'); return
+    if text.startswith('/job_trade'):
+        rest=text[len('/job_trade'):].strip()
+        payload={'symbols': 'BTCUSDT', 'horizon': 'intraday'}
+        for part in rest.split():
+            if part.startswith('symbols='): payload['symbols']=part.split('=',1)[1]
+            if part.startswith('horizon='): payload['horizon']=part.split('=',1)[1]
+        job_id=secrets.token_hex(8)
+        job={'id':job_id,'type':'trade','payload':payload,'model':telegram_model_by_chat.get(chat_id,DEFAULT_MODEL),'status':'queued','created_at':time.time()}
+        job_save(job); asyncio.create_task(execute_job(job_id))
+        await tg_send(chat_id,f'Queued trade-research job {job_id} (paper only)'); return
     model=telegram_model_by_chat.get(chat_id,DEFAULT_MODEL)
     await tg_api('sendChatAction',{'chat_id':chat_id,'action':'typing'})
     rc,out,err=await run_claude(text,model)
@@ -257,12 +532,18 @@ async def telegram_loop():
 
 @app.on_event('startup')
 async def startup():
-    global telegram_task
-    os.makedirs('/workspace',exist_ok=True)
-    if TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_CHAT_ID: telegram_task=asyncio.create_task(telegram_loop())
+    global telegram_task, job_worker_task
+    os.makedirs('/workspace', exist_ok=True)
+    JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    job_worker_task = asyncio.create_task(job_worker_loop())
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_CHAT_ID:
+        telegram_task = asyncio.create_task(telegram_loop())
 
 @app.on_event('shutdown')
 async def shutdown():
+    if job_worker_task:
+        job_worker_task.cancel()
+        with suppress(asyncio.CancelledError): await job_worker_task
     if telegram_task:
         telegram_task.cancel()
         with suppress(asyncio.CancelledError): await telegram_task
