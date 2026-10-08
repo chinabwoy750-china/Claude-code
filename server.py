@@ -127,7 +127,7 @@ async def run_claude(prompt, model):
 
 
 # --- Agent jobs (social / affiliate / trade research) ---
-JOB_TYPES = ('social', 'affiliate', 'trade')
+JOB_TYPES = ('social', 'affiliate', 'trade', 'yt_script', 'yt_assets', 'course_outline', 'job_search', 'job_packet', 'trade_live')
 
 SOCIAL_PROMPT = """You are a social content agent. Draft only. Do not post.
 Brand/niche: {brief}
@@ -154,6 +154,66 @@ Output STRICT JSON:
 {{"bias":"long|short|neutral","invalidation":"...","size_suggestion_pct":0.0,
  "rationale":"...","risks":["..."],"levels":{{"entry":null,"stop":null,"target":null}}}}
 Paper-only. Never invent live account balances."""
+
+YT_SCRIPT_PROMPT = """You are a faceless YouTube producer. Draft only. Do not upload.
+Niche/series: {niche}
+Topic: {topic}
+Length target minutes: {minutes}
+Output STRICT JSON:
+{{"title":"...","hook":"...","script_sections":[{{"timecode":"0:00","narration":"...","visual":"..."}}],
+ "description":"...","tags":["..."],"thumbnail_text":"...","cta":"...","affiliate_slots":["..."]}}
+Prefer original AI-generated visuals. No stolen copyrighted clips."""
+
+YT_ASSETS_PROMPT = """You are a faceless YT asset planner. Draft prompts for image/video generators and an edit plan. Do not call paid APIs yourself.
+Topic: {topic}
+Script summary: {script_summary}
+Output STRICT JSON:
+{{"image_prompts":["..."],"video_prompts":["..."],"broll_ideas":["..."],
+ "edit_plan":[{{"step":1,"action":"...","notes":"..."}}],"ffmpeg_notes":"...","music_mood":"..."}}
+Assets must be generatable or licensed. No scrape-random-viral-clip plans."""
+
+COURSE_OUTLINE_PROMPT = """You are a course architect for affiliate/digital product platforms.
+Topic: {topic}
+Audience: {audience}
+Platform target: {platform}
+Output STRICT JSON:
+{{"title":"...","promise":"...","modules":[{{"n":1,"title":"...","lessons":["..."],"assignment":"..."}}],
+ "pricing_ideas":["..."],"landing_bullets":["..."],"promo_hooks":["..."]}}
+No fake testimonials."""
+
+JOB_SEARCH_PROMPT = """You are a job-search agent. Research and shortlist only. Do not submit applications.
+Role targets: {roles}
+Location/remote: {location}
+Constraints: {constraints}
+Output STRICT JSON:
+{{"leads":[{{"title":"...","company":"...","url":"...","fit_score":0,"why":"...","apply_method":"easy|form|email"}}],
+ "search_queries":["..."],"notes":"..."}}
+Prefer real public listings. No fabricated employers."""
+
+JOB_PACKET_PROMPT = """You are an application packet writer. Do not submit the application.
+Role: {role}
+Company: {company}
+Job description: {jd}
+Master resume facts: {resume_facts}
+Output STRICT JSON:
+{{"tailored_resume_bullets":["..."],"cover_letter":"...","outreach_note":"...","checklist":["..."]}}
+Never invent degrees, employers, or dates not in resume facts."""
+
+TRADE_LIVE_PROMPT = """You are a micro-account trade planner. Account hard cap: ${cap}.
+Mode: {mode}. Symbols: {symbols}. Horizon: {horizon}.
+Max risk per trade USD: {max_risk}. Max daily loss USD: {max_daily_loss}.
+Output STRICT JSON:
+{{"action":"hold|propose_entry|propose_exit","symbol":"...","side":"buy|sell",
+ "size_usd":0.0,"stop_usd":0.0,"rationale":"...","risks":["..."],
+ "requires_approval":true,"paper":true}}
+If mode is paper, never claim a live fill. Never exceed cap or daily loss. No leverage unless explicitly allowed in constraints."""
+
+# Trading limits (env-overridable, $10 default book)
+TRADE_MODE = os.getenv('TRADE_MODE', 'paper')  # paper | live
+TRADE_MAX_DOLLARS = float(os.getenv('TRADE_MAX_DOLLARS', '10'))
+TRADE_MAX_RISK_USD = float(os.getenv('TRADE_MAX_RISK_USD', '1'))
+TRADE_MAX_DAILY_LOSS_USD = float(os.getenv('TRADE_MAX_DAILY_LOSS_USD', '2'))
+TRADE_HALT_FILE = FsPath(os.getenv('TRADE_HALT_FILE', '/workspace/trade_halt'))
 
 def _job_path(job_id: str) -> FsPath:
     return JOBS_DIR / job_id
@@ -201,13 +261,78 @@ def build_job_prompt(job: dict) -> str:
             symbols=p.get('symbols') or 'BTCUSDT',
             horizon=p.get('horizon') or 'intraday',
         )
+    if t == 'yt_script':
+        return YT_SCRIPT_PROMPT.format(
+            niche=p.get('niche') or 'faceless education',
+            topic=p.get('topic') or 'weekly topic',
+            minutes=p.get('minutes') or '8',
+        )
+    if t == 'yt_assets':
+        return YT_ASSETS_PROMPT.format(
+            topic=p.get('topic') or 'video topic',
+            script_summary=p.get('script_summary') or p.get('script') or 'see prior yt_script job',
+        )
+    if t == 'course_outline':
+        return COURSE_OUTLINE_PROMPT.format(
+            topic=p.get('topic') or 'course topic',
+            audience=p.get('audience') or 'beginners',
+            platform=p.get('platform') or 'gumroad',
+        )
+    if t == 'job_search':
+        return JOB_SEARCH_PROMPT.format(
+            roles=p.get('roles') or 'software engineer',
+            location=p.get('location') or 'remote',
+            constraints=p.get('constraints') or 'none',
+        )
+    if t == 'job_packet':
+        return JOB_PACKET_PROMPT.format(
+            role=p.get('role') or 'role',
+            company=p.get('company') or 'company',
+            jd=p.get('jd') or p.get('description') or '',
+            resume_facts=p.get('resume_facts') or 'see resume.md if present',
+        )
+    if t == 'trade_live':
+        return TRADE_LIVE_PROMPT.format(
+            cap=p.get('cap') or TRADE_MAX_DOLLARS,
+            mode=p.get('mode') or TRADE_MODE,
+            symbols=p.get('symbols') or 'BTCUSDT',
+            horizon=p.get('horizon') or 'intraday',
+            max_risk=p.get('max_risk') or TRADE_MAX_RISK_USD,
+            max_daily_loss=p.get('max_daily_loss') or TRADE_MAX_DAILY_LOSS_USD,
+        )
     return f"Unknown job type. Payload: {json.dumps(p)}"
+
+def trade_is_halted() -> bool:
+    return TRADE_HALT_FILE.exists()
+
+def trade_halt(reason: str) -> None:
+    TRADE_HALT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    TRADE_HALT_FILE.write_text(reason or 'halted', encoding='utf-8')
+
+def trade_resume() -> None:
+    if TRADE_HALT_FILE.exists():
+        TRADE_HALT_FILE.unlink()
 
 async def execute_job(job_id: str) -> dict:
     job = job_load(job_id)
     if not job:
         raise HTTPException(404, 'job not found')
-    if job.get('status') in ('running', 'done') and job.get('status') == 'done':
+    if job.get('status') == 'done':
+        return job
+    if job.get('status') == 'awaiting_approval':
+        return job
+    if job.get('type') == 'trade_live' and trade_is_halted():
+        job['status'] = 'error'
+        job['error'] = 'trading halted; /trade_resume after review'
+        job_save(job)
+        return job
+    # Optional human gate
+    if job.get('needs_approval') and job.get('status') == 'queued':
+        job['status'] = 'awaiting_approval'
+        job_save(job)
+        if TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_CHAT_ID:
+            with suppress(Exception):
+                await tg_send(str(TELEGRAM_ALLOWED_CHAT_ID), f"Approval needed for job {job_id} [{job.get('type')}]\n/approve {job_id} or /reject {job_id}")
         return job
     job['status'] = 'running'
     job['started_at'] = time.time()
@@ -449,7 +574,7 @@ async def tg_models():
 async def tg_handle(chat_id,text):
     text=text.strip()
     if text=='/start':
-        await tg_send(chat_id,'Claude Code + Agent jobs online.\n\nChat: send any message to run Claude Code.\n\nJobs:\n/job_social brief=... platforms=x,tiktok\n/job_affiliate offer=... audience=...\n/job_trade symbols=BTCUSDT horizon=intraday\n/jobs — list recent jobs\n/job JOB_ID — show job\n\nModels:\n/models /model /model ID /clear'); return
+        await tg_send(chat_id,'Agent control plane online.\n\nChat: any message → Claude Code.\n\nJobs:\n/job_social /job_affiliate /job_trade\n/job_yt niche=... topic=...\n/job_yt_assets topic=...\n/job_course topic=...\n/job_search roles=...\n/job_packet role=... company=...\n/job_trade_live symbols=BTCUSDT\n/jobs /job ID\n/approve ID /reject ID\n/trade_halt /trade_resume /trade_status\n\nModels: /models /model /clear\nTrading default: paper, $10 cap.'); return
     if text=='/models': await tg_send(chat_id,await tg_models()); return
     if text=='/model': await tg_send(chat_id,'Current model:\n'+telegram_model_by_chat.get(chat_id,DEFAULT_MODEL)); return
     if text.startswith('/model '):
@@ -494,7 +619,7 @@ async def tg_handle(chat_id,text):
         job={'id':job_id,'type':'affiliate','payload':payload,'model':telegram_model_by_chat.get(chat_id,DEFAULT_MODEL),'status':'queued','created_at':time.time()}
         job_save(job); asyncio.create_task(execute_job(job_id))
         await tg_send(chat_id,f'Queued affiliate job {job_id}'); return
-    if text.startswith('/job_trade'):
+    if text.startswith('/job_trade') and not text.startswith('/job_trade_live'):
         rest=text[len('/job_trade'):].strip()
         payload={'symbols': 'BTCUSDT', 'horizon': 'intraday'}
         for part in rest.split():
@@ -504,6 +629,93 @@ async def tg_handle(chat_id,text):
         job={'id':job_id,'type':'trade','payload':payload,'model':telegram_model_by_chat.get(chat_id,DEFAULT_MODEL),'status':'queued','created_at':time.time()}
         job_save(job); asyncio.create_task(execute_job(job_id))
         await tg_send(chat_id,f'Queued trade-research job {job_id} (paper only)'); return
+    if text.startswith('/job_yt_assets'):
+        rest=text[len('/job_yt_assets'):].strip()
+        payload={'topic': rest or 'faceless video', 'script_summary': rest}
+        for part in rest.split():
+            if part.startswith('topic='): payload['topic']=part.split('=',1)[1]
+        job_id=secrets.token_hex(8)
+        job={'id':job_id,'type':'yt_assets','payload':payload,'model':telegram_model_by_chat.get(chat_id,DEFAULT_MODEL),'status':'queued','created_at':time.time()}
+        job_save(job); asyncio.create_task(execute_job(job_id))
+        await tg_send(chat_id,f'Queued yt_assets job {job_id}'); return
+    if text.startswith('/job_yt'):
+        rest=text[len('/job_yt'):].strip()
+        payload={'niche':'faceless education','topic':rest or 'weekly topic','minutes':'8'}
+        for part in rest.split():
+            if part.startswith('niche='): payload['niche']=part.split('=',1)[1]
+            if part.startswith('topic='): payload['topic']=part.split('=',1)[1]
+            if part.startswith('minutes='): payload['minutes']=part.split('=',1)[1]
+        job_id=secrets.token_hex(8)
+        job={'id':job_id,'type':'yt_script','payload':payload,'model':telegram_model_by_chat.get(chat_id,DEFAULT_MODEL),'status':'queued','created_at':time.time()}
+        job_save(job); asyncio.create_task(execute_job(job_id))
+        await tg_send(chat_id,f'Queued yt_script job {job_id}'); return
+    if text.startswith('/job_course'):
+        rest=text[len('/job_course'):].strip()
+        payload={'topic':rest or 'course','audience':'beginners','platform':'gumroad'}
+        for part in rest.split():
+            if part.startswith('topic='): payload['topic']=part.split('=',1)[1]
+            if part.startswith('audience='): payload['audience']=part.split('=',1)[1]
+            if part.startswith('platform='): payload['platform']=part.split('=',1)[1]
+        job_id=secrets.token_hex(8)
+        job={'id':job_id,'type':'course_outline','payload':payload,'model':telegram_model_by_chat.get(chat_id,DEFAULT_MODEL),'status':'queued','created_at':time.time()}
+        job_save(job); asyncio.create_task(execute_job(job_id))
+        await tg_send(chat_id,f'Queued course_outline job {job_id}'); return
+    if text.startswith('/job_search'):
+        rest=text[len('/job_search'):].strip()
+        payload={'roles':rest or 'software engineer','location':'remote','constraints':''}
+        for part in rest.split():
+            if part.startswith('roles='): payload['roles']=part.split('=',1)[1]
+            if part.startswith('location='): payload['location']=part.split('=',1)[1]
+            if part.startswith('constraints='): payload['constraints']=part.split('=',1)[1]
+        job_id=secrets.token_hex(8)
+        job={'id':job_id,'type':'job_search','payload':payload,'model':telegram_model_by_chat.get(chat_id,DEFAULT_MODEL),'status':'queued','created_at':time.time()}
+        job_save(job); asyncio.create_task(execute_job(job_id))
+        await tg_send(chat_id,f'Queued job_search {job_id}'); return
+    if text.startswith('/job_packet'):
+        rest=text[len('/job_packet'):].strip()
+        payload={'role':'role','company':'company','jd':rest,'resume_facts':''}
+        for part in rest.split():
+            if part.startswith('role='): payload['role']=part.split('=',1)[1]
+            if part.startswith('company='): payload['company']=part.split('=',1)[1]
+            if part.startswith('jd='): payload['jd']=part.split('=',1)[1]
+        job_id=secrets.token_hex(8)
+        job={'id':job_id,'type':'job_packet','payload':payload,'model':telegram_model_by_chat.get(chat_id,DEFAULT_MODEL),'status':'queued','created_at':time.time()}
+        job_save(job); asyncio.create_task(execute_job(job_id))
+        await tg_send(chat_id,f'Queued job_packet {job_id}'); return
+    if text.startswith('/job_trade_live'):
+        rest=text[len('/job_trade_live'):].strip()
+        payload={'symbols':'BTCUSDT','horizon':'intraday','mode':TRADE_MODE,'cap':TRADE_MAX_DOLLARS}
+        for part in rest.split():
+            if part.startswith('symbols='): payload['symbols']=part.split('=',1)[1]
+            if part.startswith('horizon='): payload['horizon']=part.split('=',1)[1]
+        job_id=secrets.token_hex(8)
+        job={'id':job_id,'type':'trade_live','payload':payload,'model':telegram_model_by_chat.get(chat_id,DEFAULT_MODEL),'status':'queued','needs_approval':True,'created_at':time.time()}
+        job_save(job); asyncio.create_task(execute_job(job_id))
+        await tg_send(chat_id,f'Queued trade_live {job_id} (needs /approve, mode={TRADE_MODE}, cap=${TRADE_MAX_DOLLARS})'); return
+    if text.startswith('/approve '):
+        jid=text.split(None,1)[1].strip()
+        job=job_load(jid)
+        if not job: await tg_send(chat_id,'Job not found'); return
+        job['needs_approval']=False
+        job['status']='queued'
+        job_save(job); asyncio.create_task(execute_job(jid))
+        await tg_send(chat_id,f'Approved {jid}'); return
+    if text.startswith('/reject '):
+        jid=text.split(None,1)[1].strip()
+        job=job_load(jid)
+        if not job: await tg_send(chat_id,'Job not found'); return
+        job['status']='rejected'
+        job_save(job)
+        await tg_send(chat_id,f'Rejected {jid}'); return
+    if text=='/trade_halt':
+        trade_halt('manual halt via telegram')
+        await tg_send(chat_id,'Trading HALTED'); return
+    if text=='/trade_resume':
+        trade_resume()
+        await tg_send(chat_id,'Trading resumed (still subject to $ cap + mode)'); return
+    if text=='/trade_status':
+        halted=trade_is_halted()
+        await tg_send(chat_id,f"mode={TRADE_MODE} cap=${TRADE_MAX_DOLLARS} risk/trade=${TRADE_MAX_RISK_USD} daily_loss=${TRADE_MAX_DAILY_LOSS_USD} halted={halted}"); return
     model=telegram_model_by_chat.get(chat_id,DEFAULT_MODEL)
     await tg_api('sendChatAction',{'chat_id':chat_id,'action':'typing'})
     rc,out,err=await run_claude(text,model)
