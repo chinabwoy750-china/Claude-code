@@ -1,24 +1,32 @@
-# Claude Code Web
+# Claude Code Web + Telegram
 
-Replace the current deployment files with this package.
+This single Render service provides the browser UI and a Telegram interface.
 
-## Keep existing Render variables
+## Keep existing variables
 - CHINA_GPT_BASE_URL=https://gpt-china.onrender.com
 - CHINA_GPT_API_KEY=your existing private gateway key
 - MODEL=dahl/MiniMaxAI/MiniMax-M2.7
-- APP_API_KEY=your existing private app key
-- REQUEST_TIMEOUT=300 (optional)
+- APP_API_KEY=your existing private API key
 
-## Add
-- UI_PASSWORD=choose a password you will use to open the web UI
-- SESSION_SECRET=long random secret
+## Add web variables
+- UI_PASSWORD=your private web password
+- SESSION_SECRET=a long random secret
+- REQUEST_TIMEOUT=300
 
-Do not put gateway or APP_API_KEY secrets into the browser.
+## Add Telegram variables
+- TELEGRAM_BOT_TOKEN=the token from BotFather
+- TELEGRAM_ALLOWED_CHAT_ID=8543081950
+
+Never put any of these secrets in the browser.
+
+## Telegram commands
+- /start
+- /models
+- /model
+- /model MODEL_ID
+- /clear
+
+Normal messages are sent to Claude Code. Only the allowed chat ID is accepted.
 
 ## Render Start Command
-`uvicorn server:app --app-dir /app --host 0.0.0.0 --port $PORT`
-
-## Result
-Open your Render URL and you get a login screen, then a chat screen with a model selector. The browser calls `/api/chat`; the server runs Claude Code; Claude Code calls the local Anthropic-compatible adapter; the adapter calls your gateway.
-
-The custom model can still produce Claude Code's non-fatal `unrecognized_model` stderr warning; the selected model is still sent to the gateway.
+uvicorn server:app --app-dir /app --host 0.0.0.0 --port $PORT

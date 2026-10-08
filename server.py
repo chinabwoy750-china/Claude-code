@@ -1,5 +1,6 @@
 import asyncio, hashlib, hmac, json, os, secrets, time
 from typing import Any, Dict, Optional
+from contextlib import suppress
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -100,7 +101,7 @@ class ChatBody(BaseModel): message:str; model:Optional[str]=None
 @app.get('/',response_class=HTMLResponse)
 async def home(): return HTMLResponse(open('/app/static/index.html',encoding='utf-8').read())
 @app.get('/health')
-async def health(): return {'status':'ok','gateway':CHINA_GPT_BASE_URL,'default_model':DEFAULT_MODEL,'claude_code':os.path.exists('/home/claude/.local/bin/claude'),'web_ui':True}
+async def health(): return {'status':'ok','gateway':CHINA_GPT_BASE_URL,'default_model':DEFAULT_MODEL,'claude_code':os.path.exists('/home/claude/.local/bin/claude'),'web_ui':True,'telegram':bool(TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_CHAT_ID)}
 @app.post('/api/login')
 async def login(b:Dict[str,Any]):
     if not UI_PASSWORD: raise HTTPException(503,'Set UI_PASSWORD in Render environment variables first')
@@ -150,5 +151,66 @@ async def messages(request:Request,authorization:Optional[str]=Header(default=No
         except: content={'error':u.text}
         return JSONResponse(status_code=u.status_code,content=content)
     d=u.json(); ch=(d.get('choices') or [{}])[0]; return JSONResponse(oa_to_anth(ch.get('message') or {},b.get('model') or DEFAULT_MODEL,d.get('usage') or {}))
+async def tg_api(method,payload=None):
+    url=f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}"
+    async with httpx.AsyncClient(timeout=TELEGRAM_POLL_TIMEOUT+10) as c:
+        r=await c.post(url,json=payload or {}); r.raise_for_status(); return r.json()
+
+async def tg_send(chat_id,text):
+    text=text or '(empty response)'
+    for i in range(0,len(text),3900): await tg_api('sendMessage',{'chat_id':chat_id,'text':text[i:i+3900]})
+
+async def tg_models():
+    try:
+        ms=await gateway_models()
+        return 'Available models:\n\n'+'\n'.join('• '+m['id'] for m in ms) if ms else 'No models returned.'
+    except Exception as e: return 'Could not load models: '+str(e)
+
+async def tg_handle(chat_id,text):
+    text=text.strip()
+    if text=='/start':
+        await tg_send(chat_id,'Claude Code is connected. Send a message to run it.\n\nCommands:\n/models — list models\n/model — current model\n/model MODEL_ID — switch model\n/clear — reset model'); return
+    if text=='/models': await tg_send(chat_id,await tg_models()); return
+    if text=='/model': await tg_send(chat_id,'Current model:\n'+telegram_model_by_chat.get(chat_id,DEFAULT_MODEL)); return
+    if text.startswith('/model '):
+        model=text[7:].strip()
+        if not model: await tg_send(chat_id,'Usage: /model MODEL_ID'); return
+        telegram_model_by_chat[chat_id]=model; await tg_send(chat_id,'Model switched to:\n'+model); return
+    if text=='/clear': telegram_model_by_chat.pop(chat_id,None); await tg_send(chat_id,'Model reset to:\n'+DEFAULT_MODEL); return
+    model=telegram_model_by_chat.get(chat_id,DEFAULT_MODEL)
+    await tg_api('sendChatAction',{'chat_id':chat_id,'action':'typing'})
+    rc,out,err=await run_claude(text,model)
+    if rc!=0: await tg_send(chat_id,'Claude Code error:\n'+(err.strip() or out.strip())[-3900:]); return
+    try: result=json.loads(out).get('result')
+    except Exception: result=None
+    await tg_send(chat_id,str(result if result is not None else out))
+
+async def telegram_loop():
+    global telegram_offset
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_ALLOWED_CHAT_ID: return
+    with suppress(Exception): await tg_api('deleteWebhook',{'drop_pending_updates':False})
+    while True:
+        try:
+            payload={'timeout':TELEGRAM_POLL_TIMEOUT,'allowed_updates':['message']}
+            if telegram_offset is not None: payload['offset']=telegram_offset
+            data=await tg_api('getUpdates',payload)
+            for u in data.get('result',[]):
+                telegram_offset=u['update_id']+1
+                m=u.get('message') or {}; chat=str((m.get('chat') or {}).get('id',''))
+                if chat!=str(TELEGRAM_ALLOWED_CHAT_ID) or not m.get('text'): continue
+                try: await tg_handle(chat,m['text'])
+                except Exception as e: await tg_send(chat,'Bot error: '+str(e)[-3800:])
+        except asyncio.CancelledError: raise
+        except Exception: await asyncio.sleep(5)
+
 @app.on_event('startup')
-async def startup(): os.makedirs('/workspace',exist_ok=True)
+async def startup():
+    global telegram_task
+    os.makedirs('/workspace',exist_ok=True)
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_CHAT_ID: telegram_task=asyncio.create_task(telegram_loop())
+
+@app.on_event('shutdown')
+async def shutdown():
+    if telegram_task:
+        telegram_task.cancel()
+        with suppress(asyncio.CancelledError): await telegram_task
