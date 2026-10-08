@@ -92,8 +92,14 @@ def oa_to_anth(msg,model,usage):
     return {'id':'msg_'+secrets.token_hex(12),'type':'message','role':'assistant','model':model,'content':c,'stop_reason':'tool_use' if msg.get('tool_calls') else 'end_turn','stop_sequence':None,'usage':{'input_tokens':usage.get('prompt_tokens',0),'output_tokens':usage.get('completion_tokens',0)}}
 
 async def gateway_call(body):
+    payload = anth_to_openai(body)
+    print('GATEWAY REQUEST:', 'model=', payload.get('model'), 'stream=', payload.get('stream'), flush=True)
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as c:
-        return await c.post(f'{CHINA_GPT_BASE_URL}/v1/chat/completions',headers={'Authorization':f'Bearer {CHINA_GPT_API_KEY}','Content-Type':'application/json'},json=anth_to_openai(body))
+        return await c.post(
+            f'{CHINA_GPT_BASE_URL}/v1/chat/completions',
+            headers={'Authorization': f'Bearer {CHINA_GPT_API_KEY}', 'Content-Type': 'application/json'},
+            json=payload,
+        )
 
 async def run_claude(prompt, model):
     env = os.environ.copy()
@@ -171,6 +177,24 @@ async def messages(request:Request,authorization:Optional[str]=Header(default=No
         try: content=u.json()
         except Exception: content={'error':{'type':'gateway_error','message':f'Gateway returned HTTP {u.status_code}: {u.text[:2000]}'}}
         return JSONResponse(status_code=u.status_code,content=content)
+    content_type=(u.headers.get('content-type') or '').lower()
+    if 'text/event-stream' in content_type:
+        full_text=[]; tool_calls=[]
+        for line in u.text.splitlines():
+            line=line.strip()
+            if not line.startswith('data:'): continue
+            data=line[5:].strip()
+            if not data or data=='[DONE]': continue
+            try: chunk=json.loads(data)
+            except Exception: continue
+            for choice in chunk.get('choices', []):
+                delta=choice.get('delta') or {}
+                content=delta.get('content')
+                if content: full_text.append(content)
+                for tc in delta.get('tool_calls') or []: tool_calls.append(tc)
+        message={'role':'assistant','content':''.join(full_text)}
+        if tool_calls: message['tool_calls']=tool_calls
+        return JSONResponse(oa_to_anth(message,b.get('model') or DEFAULT_MODEL,{}))
     try: d=u.json()
     except Exception:
         return JSONResponse(status_code=502,content={'error':{'type':'invalid_gateway_response','message':f'Gateway returned a non-JSON response. HTTP {u.status_code}. Body: {u.text[:2000]}'}})
