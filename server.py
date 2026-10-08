@@ -152,6 +152,7 @@ async def count(request:Request,authorization:Optional[str]=Header(default=None)
 async def messages(request:Request,authorization:Optional[str]=Header(default=None),x_api_key:Optional[str]=Header(default=None)):
     if x_api_key!='local-adapter' and authorization!='Bearer local-adapter': require_app_key(authorization)
     b=await request.json(); u=await gateway_call(b)
+    print('GATEWAY DEBUG:', 'status=', u.status_code, 'content_type=', u.headers.get('content-type'), 'body=', u.text[:4000], flush=True)
     if u.status_code>=400:
         try: content=u.json()
         except Exception: content={'error':{'type':'gateway_error','message':f'Gateway returned HTTP {u.status_code}: {u.text[:2000]}'}}
