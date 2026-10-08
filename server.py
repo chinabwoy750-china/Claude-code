@@ -74,7 +74,7 @@ def anth_to_openai(b):
                 msgs.append({'role':'tool','tool_call_id':x.get('tool_use_id',''),'content':text_content(x.get('content',''))})
         if calls: msgs.append({'role':role,'content':'\n'.join(texts) if texts else None,'tool_calls':calls})
         else: msgs.append({'role':role,'content':'\n'.join(texts)})
-    o={'model':b.get('model') or DEFAULT_MODEL,'messages':msgs,'stream':bool(b.get('stream',False))}
+    o={'model':b.get('model') or DEFAULT_MODEL,'messages':msgs,'stream':False}
     for k in ('max_tokens','temperature','top_p'):
         if b.get(k) is not None:o[k]=b[k]
     if b.get('tools'):
