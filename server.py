@@ -1,344 +1,154 @@
-import os
-import json
-import uuid
-import asyncio
-from typing import Any
-
+import asyncio, hashlib, hmac, json, os, secrets, time
+from typing import Any, Dict, Optional
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
-app = FastAPI(title="Claude Code + China-GPT")
+CHINA_GPT_BASE_URL=os.getenv('CHINA_GPT_BASE_URL','https://gpt-china.onrender.com').rstrip('/')
+CHINA_GPT_API_KEY=os.getenv('CHINA_GPT_API_KEY','')
+DEFAULT_MODEL=os.getenv('MODEL','dahl/MiniMaxAI/MiniMax-M2.7')
+APP_API_KEY=os.getenv('APP_API_KEY','')
+UI_PASSWORD=os.getenv('UI_PASSWORD','')
+REQUEST_TIMEOUT=float(os.getenv('REQUEST_TIMEOUT','300'))
+SESSION_SECRET=os.getenv('SESSION_SECRET') or secrets.token_urlsafe(32)
+app=FastAPI(title='Claude Code Web')
+app.mount('/static',StaticFiles(directory='/app/static'),name='static')
 
-BASE_URL = os.getenv("CHINA_GPT_BASE_URL", "https://gpt-china.onrender.com").rstrip("/")
-CHINA_KEY = os.getenv("CHINA_GPT_API_KEY", "")
-DEFAULT_MODEL = os.getenv("MODEL", "dahl/MiniMaxAI/MiniMax-M2.7")
-APP_API_KEY = os.getenv("APP_API_KEY", "")
-PORT = os.getenv("PORT", "10000")
-TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "300"))
+def sig(v): return hmac.new(SESSION_SECRET.encode(),v.encode(),hashlib.sha256).hexdigest()
+def new_session():
+    b=f'{int(time.time())}:{secrets.token_urlsafe(24)}'; return b+'.'+sig(b)
+def valid_session(c):
+    if not c or '.' not in c:return False
+    b,s=c.rsplit('.',1)
+    try: ts=int(b.split(':',1)[0])
+    except: return False
+    return time.time()-ts<=604800 and hmac.compare_digest(s,sig(b))
+def require_app_key(a):
+    if not APP_API_KEY: raise HTTPException(500,'APP_API_KEY is not configured')
+    if a!=f'Bearer {APP_API_KEY}': raise HTTPException(401,'Unauthorized')
+def require_ui(r):
+    if not UI_PASSWORD: raise HTTPException(503,'UI_PASSWORD is not configured on the server')
+    if not valid_session(r.cookies.get('ui_session')): raise HTTPException(401,'Login required')
 
-def gateway_headers():
-    if not CHINA_KEY:
-        raise RuntimeError("CHINA_GPT_API_KEY is not configured")
-    return {
-        "Authorization": f"Bearer {CHINA_KEY}",
-        "Content-Type": "application/json",
-    }
+async def gateway_models():
+    async with httpx.AsyncClient(timeout=30) as c:
+        r=await c.get(f'{CHINA_GPT_BASE_URL}/v1/models',headers={'Authorization':f'Bearer {CHINA_GPT_API_KEY}'})
+        r.raise_for_status(); d=r.json()
+    return [{'id':x['id'],'name':x.get('name') or x['id'],'owned_by':x.get('owned_by','')} for x in d.get('data',[]) if isinstance(x,dict) and x.get('id')]
 
-def require_app_key(authorization: str | None):
-    if not APP_API_KEY:
-        raise HTTPException(503, "APP_API_KEY is not configured")
-    if authorization != f"Bearer {APP_API_KEY}":
-        raise HTTPException(401, "Invalid API key")
+def text_content(c):
+    if isinstance(c,str): return c
+    if not isinstance(c,list): return json.dumps(c,ensure_ascii=False)
+    out=[]
+    for b in c:
+        if not isinstance(b,dict): continue
+        if b.get('type')=='text': out.append(b.get('text',''))
+        elif b.get('type')=='tool_result': out.append(json.dumps({'tool_result':b.get('content',''),'tool_use_id':b.get('tool_use_id')},ensure_ascii=False))
+        elif b.get('type')=='image': out.append('[image omitted by adapter]')
+    return '\n'.join(out)
 
-def content_to_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return str(content or "")
-    out = []
-    for block in content:
-        if not isinstance(block, dict):
-            continue
-        if block.get("type") == "text":
-            out.append(block.get("text", ""))
-        elif block.get("type") == "tool_result":
-            out.append(str(block.get("content", "")))
-    return "\n".join(x for x in out if x)
-
-def anthropic_to_openai(body: dict) -> dict:
-    messages = []
-    system = body.get("system")
+def anth_to_openai(b):
+    msgs=[]; system=b.get('system')
     if system:
-        if isinstance(system, list):
-            system = "\n".join(
-                x.get("text", "") for x in system if isinstance(x, dict)
-            )
-        messages.append({"role": "system", "content": str(system)})
+        st='\n'.join(x.get('text','') if isinstance(x,dict) else str(x) for x in system) if isinstance(system,list) else str(system)
+        msgs.append({'role':'system','content':st})
+    for m in b.get('messages',[]):
+        role=m.get('role','user'); c=m.get('content','')
+        if not isinstance(c,list): msgs.append({'role':role,'content':c}); continue
+        texts=[]; calls=[]
+        for x in c:
+            if not isinstance(x,dict): continue
+            if x.get('type')=='text': texts.append(x.get('text',''))
+            elif x.get('type')=='tool_use':
+                calls.append({'id':x.get('id',''),'type':'function','function':{'name':x.get('name',''),'arguments':json.dumps(x.get('input',{}),ensure_ascii=False)}})
+            elif x.get('type')=='tool_result':
+                msgs.append({'role':'tool','tool_call_id':x.get('tool_use_id',''),'content':text_content(x.get('content',''))})
+        if calls: msgs.append({'role':role,'content':'\n'.join(texts) if texts else None,'tool_calls':calls})
+        else: msgs.append({'role':role,'content':'\n'.join(texts)})
+    o={'model':b.get('model') or DEFAULT_MODEL,'messages':msgs,'stream':bool(b.get('stream',False))}
+    for k in ('max_tokens','temperature','top_p'):
+        if b.get(k) is not None:o[k]=b[k]
+    if b.get('tools'):
+        o['tools']=[{'type':'function','function':{'name':t.get('name',''),'description':t.get('description',''),'parameters':t.get('input_schema',{'type':'object'})}} for t in b['tools']]
+    return o
 
-    for m in body.get("messages", []):
-        role = m.get("role")
-        content = m.get("content")
-        if role == "user":
-            messages.append({"role": "user", "content": content_to_text(content)})
-        elif role == "assistant":
-            messages.append({"role": "assistant", "content": content_to_text(content)})
+def oa_to_anth(msg,model,usage):
+    c=[]; t=msg.get('content')
+    if t:c.append({'type':'text','text':t})
+    for call in msg.get('tool_calls') or []:
+        fn=call.get('function',{})
+        try: args=json.loads(fn.get('arguments','{}'))
+        except: args={}
+        c.append({'type':'tool_use','id':call.get('id',''),'name':fn.get('name',''),'input':args})
+    return {'id':'msg_'+secrets.token_hex(12),'type':'message','role':'assistant','model':model,'content':c,'stop_reason':'tool_use' if msg.get('tool_calls') else 'end_turn','stop_sequence':None,'usage':{'input_tokens':usage.get('prompt_tokens',0),'output_tokens':usage.get('completion_tokens',0)}}
 
-    result = {
-        "model": body.get("model") or DEFAULT_MODEL,
-        "messages": messages,
-        "stream": bool(body.get("stream", False)),
-    }
+async def gateway_call(body):
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as c:
+        return await c.post(f'{CHINA_GPT_BASE_URL}/v1/chat/completions',headers={'Authorization':f'Bearer {CHINA_GPT_API_KEY}','Content-Type':'application/json'},json=anth_to_openai(body))
 
-    for key in ("max_tokens", "temperature", "top_p", "stop"):
-        if body.get(key) is not None:
-            result[key] = body[key]
+async def run_claude(prompt,model):
+    env=os.environ.copy(); env['ANTHROPIC_BASE_URL']=f"http://127.0.0.1:{os.getenv('PORT','10000')}"; env['ANTHROPIC_API_KEY']='local-adapter'
+    cmd=['/home/claude/.local/bin/claude','-p',prompt,'--model',model,'--output-format','json','--permission-mode','bypassPermissions']
+    p=await asyncio.create_subprocess_exec(*cmd,cwd='/workspace',env=env,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
+    out,err=await asyncio.wait_for(p.communicate(),timeout=REQUEST_TIMEOUT)
+    return p.returncode,out.decode(errors='replace'),err.decode(errors='replace')
 
-    # Translate common Claude tool schemas to OpenAI function tools.
-    if body.get("tools"):
-        result["tools"] = [{
-            "type": "function",
-            "function": {
-                "name": t.get("name", ""),
-                "description": t.get("description", ""),
-                "parameters": t.get("input_schema", {"type": "object"}),
-            }
-        } for t in body["tools"]]
+class ChatBody(BaseModel): message:str; model:Optional[str]=None
 
-    return result
-
-def openai_to_anthropic(data: dict, requested_model: str) -> dict:
-    choice = (data.get("choices") or [{}])[0]
-    msg = choice.get("message") or {}
-    blocks = []
-
-    if msg.get("content"):
-        blocks.append({"type": "text", "text": msg["content"]})
-
-    for tc in msg.get("tool_calls") or []:
-        fn = tc.get("function") or {}
-        try:
-            inp = json.loads(fn.get("arguments") or "{}")
-        except Exception:
-            inp = {}
-        blocks.append({
-            "type": "tool_use",
-            "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:16]}"),
-            "name": fn.get("name", ""),
-            "input": inp,
-        })
-
-    finish = choice.get("finish_reason")
-    stop_reason = {
-        "stop": "end_turn",
-        "length": "max_tokens",
-        "tool_calls": "tool_use",
-    }.get(finish, "end_turn")
-
-    usage = data.get("usage") or {}
-    return {
-        "id": data.get("id", f"msg_{uuid.uuid4().hex}"),
-        "type": "message",
-        "role": "assistant",
-        "model": data.get("model", requested_model),
-        "content": blocks,
-        "stop_reason": stop_reason,
-        "stop_sequence": None,
-        "usage": {
-            "input_tokens": usage.get("prompt_tokens", 0),
-            "output_tokens": usage.get("completion_tokens", 0),
-        },
-    }
-
-@app.get("/")
-async def root():
-    return {
-        "service": "Claude Code + China-GPT",
-        "status": "ok",
-        "claude_code": True,
-        "adapter": True,
-        "default_model": DEFAULT_MODEL,
-    }
-
-@app.get("/health")
-async def health():
-    return {
-        "status": "ok",
-        "gateway": BASE_URL,
-        "default_model": DEFAULT_MODEL,
-        "claude_code": True,
-    }
-
-@app.get("/v1/models")
-async def models(authorization: str | None = Header(default=None)):
-    require_app_key(authorization)
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(f"{BASE_URL}/v1/models", headers=gateway_headers())
-    return JSONResponse(status_code=r.status_code, content=r.json())
-
-@app.post("/v1/messages")
-async def messages(body: dict):
-    payload = anthropic_to_openai(body)
-    requested_model = payload["model"]
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        if not body.get("stream"):
-            r = await client.post(
-                f"{BASE_URL}/v1/chat/completions",
-                headers=gateway_headers(),
-                json=payload,
-            )
-            if r.status_code >= 400:
-                try:
-                    detail = r.json()
-                except Exception:
-                    detail = {"error": r.text}
-                return JSONResponse(status_code=r.status_code, content=detail)
-            return JSONResponse(
-                content=openai_to_anthropic(r.json(), requested_model)
-            )
-
-    async def stream():
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            async with client.stream(
-                "POST",
-                f"{BASE_URL}/v1/chat/completions",
-                headers=gateway_headers(),
-                json=payload,
-            ) as r:
-                if r.status_code >= 400:
-                    raw = await r.aread()
-                    yield "event: error\n"
-                    yield "data: " + json.dumps({
-                        "type": "error",
-                        "error": {"type": "api_error", "message": raw.decode(errors="replace")}
-                    }) + "\n\n"
-                    return
-
-                msg_id = f"msg_{uuid.uuid4().hex}"
-                yield "event: message_start\n"
-                yield "data: " + json.dumps({
-                    "type": "message_start",
-                    "message": {
-                        "id": msg_id,
-                        "type": "message",
-                        "role": "assistant",
-                        "model": requested_model,
-                        "content": [],
-                        "stop_reason": None,
-                        "stop_sequence": None,
-                        "usage": {"input_tokens": 0, "output_tokens": 0},
-                    }
-                }) + "\n\n"
-
-                text_started = False
-                async for line in r.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    raw = line[5:].strip()
-                    if raw == "[DONE]":
-                        continue
-                    try:
-                        chunk = json.loads(raw)
-                    except Exception:
-                        continue
-
-                    choice = (chunk.get("choices") or [{}])[0]
-                    delta = choice.get("delta") or {}
-
-                    if delta.get("content"):
-                        if not text_started:
-                            text_started = True
-                            yield "event: content_block_start\n"
-                            yield "data: " + json.dumps({
-                                "type": "content_block_start",
-                                "index": 0,
-                                "content_block": {"type": "text", "text": ""},
-                            }) + "\n\n"
-
-                        yield "event: content_block_delta\n"
-                        yield "data: " + json.dumps({
-                            "type": "content_block_delta",
-                            "index": 0,
-                            "delta": {
-                                "type": "text_delta",
-                                "text": delta["content"],
-                            },
-                        }) + "\n\n"
-
-                if text_started:
-                    yield "event: content_block_stop\n"
-                    yield "data: " + json.dumps({
-                        "type": "content_block_stop", "index": 0
-                    }) + "\n\n"
-
-                yield "event: message_delta\n"
-                yield "data: " + json.dumps({
-                    "type": "message_delta",
-                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                    "usage": {"output_tokens": 0},
-                }) + "\n\n"
-
-                yield "event: message_stop\n"
-                yield "data: " + json.dumps({"type": "message_stop"}) + "\n\n"
-
-    return StreamingResponse(stream(), media_type="text/event-stream")
-
-@app.get("/claude/version")
-async def claude_version(authorization: str | None = Header(default=None)):
-    require_app_key(authorization)
-    proc = await asyncio.create_subprocess_exec(
-        "claude", "--version",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
-    return {
-        "returncode": proc.returncode,
-        "stdout": stdout.decode().strip(),
-        "stderr": stderr.decode().strip(),
-    }
-
-@app.post("/claude/run")
-async def claude_run(
-    request: Request,
-    authorization: str | None = Header(default=None),
-):
-    """
-    Run Claude Code headlessly.
-
-    JSON:
-      {"prompt":"...", "model":"...", "permission_mode":"bypassPermissions"}
-    """
-    require_app_key(authorization)
-    body = await request.json()
-
-    prompt = body.get("prompt")
-    if not prompt:
-        raise HTTPException(400, "prompt is required")
-
-    model = body.get("model") or DEFAULT_MODEL
-    permission_mode = body.get("permission_mode", "bypassPermissions")
-
-    cmd = [
-        "claude",
-        "-p",
-        prompt,
-        "--output-format",
-        "json",
-        "--model",
-        model,
-        "--permission-mode",
-        permission_mode,
-    ]
-
-    env = os.environ.copy()
-    # Claude Code talks to this same service; this endpoint then translates
-    # its Anthropic requests to China-GPT.
-    env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{PORT}"
-    env["ANTHROPIC_API_KEY"] = "local-adapter"
-    env["ANTHROPIC_MODEL"] = model
-    env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
-    env["DISABLE_AUTOUPDATER"] = "1"
-
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd="/workspace",
-        env=env,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    stdout, stderr = await proc.communicate()
-
-    return JSONResponse({
-        "returncode": proc.returncode,
-        "model": model,
-        "stdout": stdout.decode(errors="replace"),
-        "stderr": stderr.decode(errors="replace"),
-    })
-
-@app.post("/v1/messages/count_tokens")
-async def count_tokens(body: dict):
-    text = json.dumps(body.get("messages", [])) + json.dumps(body.get("system", ""))
-    return {"input_tokens": max(1, len(text) // 4)}
+@app.get('/',response_class=HTMLResponse)
+async def home(): return HTMLResponse(open('/app/static/index.html',encoding='utf-8').read())
+@app.get('/health')
+async def health(): return {'status':'ok','gateway':CHINA_GPT_BASE_URL,'default_model':DEFAULT_MODEL,'claude_code':os.path.exists('/home/claude/.local/bin/claude'),'web_ui':True}
+@app.post('/api/login')
+async def login(b:Dict[str,Any]):
+    if not UI_PASSWORD: raise HTTPException(503,'Set UI_PASSWORD in Render environment variables first')
+    if not hmac.compare_digest(str(b.get('password','')),UI_PASSWORD): raise HTTPException(401,'Wrong password')
+    r=JSONResponse({'ok':True}); r.set_cookie('ui_session',new_session(),max_age=604800,httponly=True,secure=True,samesite='lax',path='/'); return r
+@app.post('/api/logout')
+async def logout():
+    r=JSONResponse({'ok':True}); r.delete_cookie('ui_session',path='/'); return r
+@app.get('/api/me')
+async def me(r:Request): require_ui(r); return {'authenticated':True}
+@app.get('/api/models')
+async def api_models(r:Request):
+    require_ui(r)
+    try: models=await gateway_models(); warning=None
+    except Exception as e: models=[{'id':DEFAULT_MODEL,'name':DEFAULT_MODEL,'owned_by':''}]; warning=str(e)
+    if not any(x['id']==DEFAULT_MODEL for x in models): models.insert(0,{'id':DEFAULT_MODEL,'name':DEFAULT_MODEL,'owned_by':''})
+    return {'models':models,'warning':warning}
+@app.post('/api/chat')
+async def chat(b:ChatBody,r:Request):
+    require_ui(r)
+    if not b.message.strip(): raise HTTPException(400,'Message is empty')
+    model=b.model or DEFAULT_MODEL; rc,out,err=await run_claude(b.message,model); result=None
+    try: result=json.loads(out).get('result')
+    except: pass
+    if rc!=0: raise HTTPException(500,(err.strip() or out.strip() or 'Claude Code failed')[-4000:])
+    return {'ok':True,'model':model,'result':result if result is not None else out,'stderr':err[-2000:] if err else ''}
+@app.get('/claude/version')
+async def version(authorization:Optional[str]=Header(default=None)):
+    require_app_key(authorization); p=await asyncio.create_subprocess_exec('/home/claude/.local/bin/claude','--version',stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE); o,e=await p.communicate(); return {'returncode':p.returncode,'stdout':o.decode(errors='replace'),'stderr':e.decode(errors='replace')}
+@app.post('/claude/run')
+async def run(b:Dict[str,Any],authorization:Optional[str]=Header(default=None)):
+    require_app_key(authorization); prompt=str(b.get('prompt','')).strip()
+    if not prompt: raise HTTPException(400,'prompt is required')
+    model=str(b.get('model') or DEFAULT_MODEL); rc,out,err=await run_claude(prompt,model); return {'returncode':rc,'model':model,'stdout':out,'stderr':err}
+@app.get('/v1/models')
+async def models(authorization:Optional[str]=Header(default=None)): require_app_key(authorization); return {'object':'list','data':await gateway_models()}
+@app.post('/v1/messages/count_tokens')
+async def count(request:Request,authorization:Optional[str]=Header(default=None)):
+    if authorization!='Bearer local-adapter': require_app_key(authorization)
+    b=await request.json(); return {'input_tokens':max(1,len(json.dumps(b.get('messages',[]),ensure_ascii=False))//4)}
+@app.post('/v1/messages')
+async def messages(request:Request,authorization:Optional[str]=Header(default=None)):
+    if authorization!='Bearer local-adapter': require_app_key(authorization)
+    b=await request.json(); u=await gateway_call(b)
+    if u.status_code>=400:
+        try: content=u.json()
+        except: content={'error':u.text}
+        return JSONResponse(status_code=u.status_code,content=content)
+    d=u.json(); ch=(d.get('choices') or [{}])[0]; return JSONResponse(oa_to_anth(ch.get('message') or {},b.get('model') or DEFAULT_MODEL,d.get('usage') or {}))
+@app.on_event('startup')
+async def startup(): os.makedirs('/workspace',exist_ok=True)

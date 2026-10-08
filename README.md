@@ -1,41 +1,24 @@
-# Claude Code on Render → China-GPT
+# Claude Code Web
 
-This service runs the current native Claude Code CLI and provides an
-Anthropic-to-OpenAI adapter for the China-GPT gateway.
+Replace the current deployment files with this package.
 
-## Render environment variables
+## Keep existing Render variables
+- CHINA_GPT_BASE_URL=https://gpt-china.onrender.com
+- CHINA_GPT_API_KEY=your existing private gateway key
+- MODEL=dahl/MiniMaxAI/MiniMax-M2.7
+- APP_API_KEY=your existing private app key
+- REQUEST_TIMEOUT=300 (optional)
 
-Required:
+## Add
+- UI_PASSWORD=choose a password you will use to open the web UI
+- SESSION_SECRET=long random secret
 
-- `CHINA_GPT_BASE_URL=https://gpt-china.onrender.com`
-- `CHINA_GPT_API_KEY=<your crk_live key>`
-- `MODEL=dahl/MiniMaxAI/MiniMax-M2.7`
-- `APP_API_KEY=<create your own long random secret>`
+Do not put gateway or APP_API_KEY secrets into the browser.
 
-Optional:
+## Render Start Command
+`uvicorn server:app --app-dir /app --host 0.0.0.0 --port $PORT`
 
-- `REQUEST_TIMEOUT=300`
+## Result
+Open your Render URL and you get a login screen, then a chat screen with a model selector. The browser calls `/api/chat`; the server runs Claude Code; Claude Code calls the local Anthropic-compatible adapter; the adapter calls your gateway.
 
-Never commit these secrets to GitHub.
-
-## Endpoints
-
-- `GET /health`
-- `GET /claude/version` (requires `Authorization: Bearer APP_API_KEY`)
-- `POST /claude/run` (requires `Authorization: Bearer APP_API_KEY`)
-- `GET /v1/models` (requires `Authorization: Bearer APP_API_KEY`)
-- `POST /v1/messages` (used internally by Claude Code)
-
-Example request:
-
-POST /claude/run
-Authorization: Bearer YOUR_APP_API_KEY
-Content-Type: application/json
-
-{
-  "prompt": "Inspect the project and explain what it does.",
-  "model": "dahl/MiniMaxAI/MiniMax-M2.7"
-}
-
-Security note: `/claude/run` can execute commands through Claude Code.
-Keep `APP_API_KEY` private and do not expose this endpoint without authentication.
+The custom model can still produce Claude Code's non-fatal `unrecognized_model` stderr warning; the selected model is still sent to the gateway.
