@@ -1,1 +1,1195 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Claude Code Web</title><style>:root{color-scheme:dark;font-family:system-ui,-apple-system,Segoe UI,sans-serif}*{box-sizing:border-box}body{margin:0;background:#0b0d10;color:#f4f4f5;height:100vh}button,input,textarea,select{font:inherit}button{cursor:pointer}#login{height:100vh;display:grid;place-items:center;padding:20px}.card{width:min(420px,100%);background:#15181d;border:1px solid #292e36;border-radius:18px;padding:28px;box-shadow:0 20px 70px #0008}.logo{font-size:26px;font-weight:700}.muted{color:#969da8;font-size:14px;margin-top:6px}.field{display:flex;flex-direction:column;gap:8px;margin-top:20px}input,textarea,select{background:#0e1115;color:#fff;border:1px solid #303641;border-radius:12px;padding:12px;outline:none}.primary{width:100%;border:0;background:#f2f2f2;color:#101114;border-radius:12px;padding:12px;margin-top:18px;font-weight:700}#error{color:#ff7d7d;margin-top:12px;font-size:14px}#app{height:100vh;display:none;grid-template-rows:auto 1fr auto}header{height:64px;border-bottom:1px solid #242830;display:flex;align-items:center;justify-content:space-between;padding:0 18px}.brand{font-weight:700}.controls{display:flex;gap:8px;align-items:center}select{padding:8px 30px 8px 10px;max-width:55vw}.ghost{background:transparent;border:1px solid #303641;color:#d8dbe0;border-radius:10px;padding:8px 11px}#messages{overflow:auto;padding:24px 16px 30px}.thread{width:min(900px,100%);margin:auto;display:flex;flex-direction:column;gap:18px}.msg{max-width:85%;white-space:pre-wrap;line-height:1.55;border-radius:16px;padding:13px 15px}.user{align-self:flex-end;background:#262b33}.assistant{align-self:flex-start;background:#15181d;border:1px solid #252a32}.meta{font-size:11px;color:#777f8b;margin-bottom:6px}footer{border-top:1px solid #242830;padding:12px 16px 16px}.composer{width:min(900px,100%);margin:auto;display:flex;gap:10px;align-items:flex-end}textarea{flex:1;min-height:50px;max-height:180px;resize:vertical}.send{border:0;border-radius:12px;background:#f2f2f2;color:#111;padding:12px 18px;font-weight:700}.send:disabled{opacity:.5}.status{width:min(900px,100%);margin:7px auto 0;color:#737b87;font-size:12px}</style></head><body><div id="login"><div class="card"><div class="logo">Claude Code Web</div><div class="muted">Your private Claude Code workspace</div><div class="field"><label>Password</label><input id="password" type="password" autocomplete="current-password" placeholder="UI password"></div><button class="primary" id="loginBtn">Sign in</button><div id="error"></div></div></div><div id="app"><header><div class="brand">Claude Code Web</div><div class="controls"><select id="model"></select><button class="ghost" id="logout">Log out</button></div></header><main id="messages"><div class="thread" id="thread"></div></main><footer><div class="composer"><textarea id="input" placeholder="Ask Claude Code anything…"></textarea><button class="send" id="send">Send</button></div><div class="status" id="status"></div></footer></div><script>const $=id=>document.getElementById(id);let busy=false;async function api(u,o={}){const r=await fetch(u,{...o,headers:{'Content-Type':'application/json',...(o.headers||{})}});let d={};try{d=await r.json()}catch{}if(!r.ok)throw Error(d.detail||d.error||'Request failed');return d}function showApp(){$('login').style.display='none';$('app').style.display='grid';loadModels()}function showLogin(){$('app').style.display='none';$('login').style.display='grid'}async function check(){try{await api('/api/me');showApp()}catch{showLogin()}}async function login(){ $('error').textContent='';try{await api('/api/login',{method:'POST',body:JSON.stringify({password:$('password').value})});$('password').value='';showApp()}catch(e){$('error').textContent=e.message}}async function loadModels(){try{const d=await api('/api/models');$('model').innerHTML='';d.models.forEach(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=m.name||m.id;$('model').appendChild(o)})}catch(e){$('status').textContent=e.message}}function add(role,text,model=''){const w=document.createElement('div');w.className='msg '+role;const m=document.createElement('div');m.className='meta';m.textContent=role==='user'?'You':'Claude Code'+(model?' · '+model:'');const b=document.createElement('div');b.textContent=text;w.append(m,b);$('thread').appendChild(w);$('messages').scrollTop=$('messages').scrollHeight}async function send(){if(busy)return;const text=$('input').value.trim();if(!text)return;busy=true;$('send').disabled=true;$('status').textContent='Claude Code is working…';add('user',text);$('input').value='';try{const d=await api('/api/chat',{method:'POST',body:JSON.stringify({message:text,model:$('model').value})});add('assistant',d.result||'(No text returned)',d.model);$('status').textContent=''}catch(e){add('assistant','Error: '+e.message);$('status').textContent='Request failed'}finally{busy=false;$('send').disabled=false;$('input').focus()}}$('loginBtn').onclick=login;$('password').onkeydown=e=>{if(e.key==='Enter')login()};$('send').onclick=send;$('input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}};$('logout').onclick=async()=>{try{await api('/api/logout',{method:'POST'})}finally{showLogin()}};check();</script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>AXION Desk</title>
+<style>
+/* ---------- tokens ---------- */
+:root{
+  color-scheme:dark;
+  --bg:#0b0d10;
+  --surface:#12151a;
+  --surface-2:#15181d;
+  --surface-3:#181c22;
+  --border:#242830;
+  --border-2:#303641;
+  --text:#f4f4f5;
+  --text-2:#969da8;
+  --muted:#737b87;
+  --accent:#7dd3fc;
+  --danger:#ff7d7d;
+  --success:#6ee7b7;
+  --warning:#fbbf24;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --r-lg:16px;
+  --r-md:12px;
+  --r-sm:10px;
+}
+*,*::before,*::after{box-sizing:border-box}
+html,body{height:100%}
+@supports (height:100dvh){html,body{height:100dvh}}
+body{
+  margin:0;background:var(--bg);color:var(--text);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:14px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer}
+button:disabled{cursor:not-allowed;opacity:.45}
+h1,h2,h3,p{margin:0}
+
+/* focus visibility for keyboard users */
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input:focus-visible,textarea:focus-visible,select:focus-visible{outline-offset:0;border-color:var(--accent)}
+
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#2a2f38;border-radius:8px;border:2px solid var(--bg)}
+* {scrollbar-width:thin;scrollbar-color:#2a2f38 transparent}
+
+/* ---------- primitives ---------- */
+input:not([type=checkbox]),textarea,select{
+  width:100%;background:#0e1115;color:var(--text);
+  border:1px solid var(--border-2);border-radius:var(--r-sm);
+  padding:10px 12px;outline:none;
+}
+input::placeholder,textarea::placeholder{color:#5c6470}
+textarea{resize:none;line-height:1.55}
+select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,#7c8593 50%),linear-gradient(135deg,#7c8593 50%,transparent 50%);background-position:calc(100% - 16px) 50%,calc(100% - 11px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:32px}
+
+.btn{
+  border:1px solid transparent;border-radius:var(--r-sm);
+  padding:10px 14px;font-weight:600;background:transparent;color:var(--text);
+  transition:background .12s,border-color .12s,color .12s;
+  white-space:nowrap;
+}
+.btn.primary{background:#f2f2f2;color:#101114;border-color:#f2f2f2}
+.btn.primary:hover:not(:disabled){background:#fff}
+.btn.ghost{border-color:var(--border-2);color:#d8dbe0}
+.btn.ghost:hover:not(:disabled){background:#1b1f26;border-color:#3d4552}
+.btn.sm{padding:6px 11px;font-size:12px;border-radius:9px}
+
+.copy{
+  border:1px solid var(--border-2);background:transparent;color:var(--text-2);
+  border-radius:7px;font-size:10px;font-weight:600;letter-spacing:.04em;
+  padding:2px 7px;text-transform:none;transition:opacity .12s,color .12s,border-color .12s;
+}
+.copy:hover{color:var(--text);border-color:#3d4552}
+.meta .copy{opacity:0}
+.msg:hover .meta .copy,.meta .copy:focus-visible{opacity:1}
+@media (hover:none){.meta .copy{opacity:1}}
+
+/* ---------- login ---------- */
+#login{height:100%;display:grid;place-items:center;padding:20px}
+.card{
+  width:min(420px,100%);background:var(--surface);
+  border:1px solid var(--border);border-radius:18px;padding:28px;
+  box-shadow:0 24px 80px #0009;
+}
+.logo{font-size:22px;font-weight:700;letter-spacing:.01em}
+.logo span{color:var(--text-2);font-weight:600}
+.muted{color:var(--text-2);font-size:13px;margin-top:6px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:12px;font-weight:600;color:var(--text-2)}
+.hint{font-size:11px;color:var(--muted)}
+#login .field{margin-top:22px}
+#login .btn{margin-top:16px;width:100%}
+#error{color:var(--danger);margin-top:12px;font-size:13px;min-height:18px}
+
+/* ---------- shell ---------- */
+#app{display:none;height:100%;grid-template-rows:auto minmax(0,1fr)}
+#app.ready{display:grid}
+
+header{
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+  padding:10px 14px;background:var(--surface);border-bottom:1px solid var(--border);
+}
+.brand{font-size:15px;font-weight:700;letter-spacing:.02em;order:1}
+.brand span{color:var(--text-2);font-weight:600}
+
+.segmented{
+  order:3;flex:1 1 100%;display:flex;gap:2px;
+  background:#0e1115;border:1px solid var(--border);border-radius:var(--r-md);padding:3px;
+}
+.segmented button{
+  flex:1;border:0;background:transparent;color:var(--text-2);
+  padding:8px;border-radius:9px;font-size:13px;font-weight:600;
+  transition:background .12s,color .12s;
+}
+.segmented button[aria-selected="true"]{background:#262b33;color:var(--text)}
+
+.controls{order:2;margin-left:auto;display:flex;align-items:center;gap:8px;justify-content:flex-end;min-width:0}
+.ctl{display:inline-flex;min-width:0}
+.ctl select,.ctl input{max-width:180px}
+@media (max-width:520px){.ctl select,.ctl input{max-width:118px}}
+
+.pill{
+  display:inline-flex;align-items:center;gap:7px;
+  font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--text-2);background:#0e1115;border:1px solid var(--border);
+  border-radius:999px;padding:6px 11px;white-space:nowrap;
+}
+.pill .dot{width:6px;height:6px;border-radius:50%;background:var(--muted)}
+.pill[data-state="working"] .dot{background:var(--accent)}
+.pill[data-state="error"] .dot{background:var(--danger)}
+.pill[data-state="ready"] .dot{background:var(--success)}
+@media (max-width:640px){.pill{display:none}}
+
+@media (min-width:820px){
+  header{flex-wrap:nowrap;padding:10px 18px;min-height:64px}
+  .segmented{order:2;flex:0 0 auto;margin-left:8px}
+  .segmented button{flex:0 0 auto;padding:8px 18px}
+  .controls{order:3}
+}
+
+.views{position:relative;min-height:0}
+.view{position:absolute;inset:0;display:none;flex-direction:column;min-height:0}
+.view.active{display:flex}
+
+/* ---------- chat ---------- */
+#messages{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:28px 16px 8px}
+.thread{width:min(880px,100%);margin:0 auto;display:flex;flex-direction:column;gap:18px}
+.msg{max-width:min(86%,720px);border-radius:var(--r-lg);padding:12px 15px;line-height:1.6}
+.msg .body{white-space:pre-wrap;word-break:break-word}
+.msg.user{align-self:flex-end;background:#262b33;border:1px solid #2f3540}
+.msg.assistant{align-self:flex-start;background:var(--surface-2);border:1px solid var(--border)}
+.meta{
+  display:flex;align-items:center;gap:8px;margin-bottom:6px;
+  font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
+}
+.meta .copy{margin-left:auto}
+
+details.stderr{margin-top:10px;border-top:1px solid var(--border);padding-top:8px}
+details.stderr summary{
+  cursor:pointer;list-style:none;font-size:11px;font-weight:600;
+  color:var(--danger);letter-spacing:.04em;text-transform:uppercase;
+}
+details.stderr summary::-webkit-details-marker{display:none}
+details.stderr summary::before{content:"▸ ";color:var(--muted)}
+details.stderr[open] summary::before{content:"▾ "}
+details.stderr pre{
+  margin:8px 0 0;padding:10px;border-radius:10px;background:#0e1115;
+  border:1px solid var(--border);font-family:var(--mono);font-size:11.5px;line-height:1.55;
+  white-space:pre-wrap;word-break:break-word;max-height:280px;overflow:auto;color:var(--danger);
+}
+
+.empty{color:var(--muted);text-align:center;padding:56px 16px;font-size:13px}
+.empty strong{display:block;color:var(--text-2);font-size:15px;font-weight:600;margin-bottom:6px}
+
+footer{
+  border-top:1px solid var(--border);background:var(--bg);
+  padding:12px 16px max(14px,env(safe-area-inset-bottom));
+}
+.composer{width:min(880px,100%);margin:0 auto;display:flex;gap:10px;align-items:flex-end}
+#input{flex:1;min-height:48px;max-height:180px;border-radius:var(--r-md);padding:13px 14px;overflow-y:auto}
+.status{width:min(880px,100%);margin:8px auto 0;font-size:12px;color:var(--muted);min-height:16px}
+
+/* ---------- jobs ---------- */
+.jobs-wrap{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);overflow-y:auto}
+@media (min-width:900px){
+  .jobs-wrap{grid-template-columns:340px minmax(0,1fr);overflow:hidden}
+}
+.job-form-pane{
+  background:var(--surface);border-bottom:1px solid var(--border);
+  padding:18px 16px 28px;
+}
+@media (min-width:900px){
+  .job-form-pane{border-bottom:0;border-right:1px solid var(--border);overflow-y:auto}
+}
+#jobForm{display:flex;flex-direction:column;gap:14px}
+@media (min-width:900px){#jobForm{max-width:none}}
+.pane-head h2{font-size:14px;font-weight:700}
+.pane-head p{margin-top:3px;font-size:12px;color:var(--muted)}
+#jobFields{display:flex;flex-direction:column;gap:14px}
+
+.check{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--text-2);cursor:pointer;user-select:none}
+.check input{width:auto;accent-color:var(--accent);margin:0}
+
+.notice{
+  border:1px solid rgba(251,191,36,.28);background:rgba(251,191,36,.07);
+  color:var(--warning);border-radius:var(--r-sm);padding:10px 12px;font-size:12px;line-height:1.5;
+}
+.form-msg{font-size:12px;color:var(--danger);min-height:0}
+.form-msg:not(:empty){min-height:16px}
+
+.jobs-main{display:flex;flex-direction:column;min-height:0;background:var(--bg)}
+.jobs-toolbar{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--border);
+}
+.trade-strip{
+  font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--text-2);background:#0e1115;border:1px solid var(--border);
+  border-radius:999px;padding:5px 11px;white-space:nowrap;
+}
+.spacer{flex:1}
+.jobs-count{font-size:12px;color:var(--muted)}
+.jobs-msg{font-size:12px;color:var(--danger)}
+.jobs-scroll{flex:1;min-height:0;padding:16px}
+@media (min-width:900px){.jobs-scroll{overflow-y:auto}}
+@media (max-width:899px){.jobs-scroll{overflow:visible}}
+
+.job-list{display:flex;flex-direction:column;gap:8px;width:min(1040px,100%)}
+.job-row{
+  display:flex;align-items:center;gap:12px;
+  padding:12px 14px;background:var(--surface-2);
+  border:1px solid var(--border);border-radius:var(--r-md);
+  cursor:pointer;transition:background .12s,border-color .12s;
+}
+.job-row:hover{background:var(--surface-3);border-color:var(--border-2)}
+.job-row.selected{border-color:#3f4a58;background:var(--surface-3)}
+.job-main{flex:1;min-width:0}
+.job-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.job-id{font-family:var(--mono);font-size:12px;color:var(--text)}
+.job-sub{margin-top:3px;font-size:12px;color:var(--muted)}
+.job-actions{display:flex;gap:6px;flex-shrink:0}
+
+.badge{
+  font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  padding:3px 8px;border-radius:999px;border:1px solid var(--border-2);
+  color:var(--text-2);background:#0e1115;white-space:nowrap;
+}
+.badge.running,.badge.in_progress{color:var(--accent);border-color:rgba(125,211,252,.35);background:rgba(125,211,252,.08)}
+.badge.done,.badge.success,.badge.completed{color:var(--success);border-color:rgba(110,231,183,.35);background:rgba(110,231,183,.08)}
+.badge.error,.badge.failed,.badge.rejected{color:var(--danger);border-color:rgba(255,125,125,.35);background:rgba(255,125,125,.08)}
+.badge.awaiting_approval,.badge.pending{color:var(--warning);border-color:rgba(251,191,36,.35);background:rgba(251,191,36,.08)}
+.badge.queued{color:var(--text-2);border-color:var(--border-2);background:#0e1115}
+
+/* ---------- drawer ---------- */
+.drawer-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:20}
+.drawer-backdrop[hidden]{display:none}
+@media (min-width:900px){.drawer-backdrop{display:none!important}}
+
+.drawer{
+  position:absolute;top:0;right:0;bottom:0;width:min(560px,100%);
+  display:flex;flex-direction:column;z-index:30;
+  background:var(--surface);border-left:1px solid var(--border);
+  box-shadow:-24px 0 60px rgba(0,0,0,.45);
+  transform:translateX(100%);visibility:hidden;
+  transition:transform .2s cubic-bezier(.4,0,.2,1),visibility .2s;
+}
+.drawer.open{transform:translateX(0);visibility:visible}
+
+.drawer-head{
+  display:flex;align-items:flex-start;gap:12px;
+  padding:14px 16px;background:var(--surface-2);border-bottom:1px solid var(--border);
+}
+.drawer-title{font-family:var(--mono);font-size:13px;font-weight:700}
+.drawer-sub{margin-top:3px;font-size:12px;color:var(--muted)}
+.drawer-body{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:16px}
+.drawer-status{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
+.section{border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface-2);overflow:hidden}
+.section-head{
+  display:flex;align-items:center;gap:8px;
+  padding:9px 12px;border-bottom:1px solid var(--border);
+  font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text-2);
+  background:rgba(255,255,255,.015);
+}
+.section-head .copy{margin-left:auto}
+.section pre{
+  margin:0;padding:12px;font-family:var(--mono);font-size:12px;line-height:1.55;
+  white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto;color:#d8dbe0;
+}
+summary.section-head{cursor:pointer;list-style:none;user-select:none}
+summary.section-head::-webkit-details-marker{display:none}
+summary.section-head::after{content:"▸";margin-left:auto;font-size:10px;color:var(--muted)}
+details[open]>summary.section-head::after{content:"▾"}
+
+.skel{height:14px;border-radius:7px;background:#1c2129;animation:skel 1.3s ease-in-out infinite}
+.skel.w60{width:60%}.skel.w80{width:80%}.skel.w40{width:40%}
+@keyframes skel{0%,100%{opacity:.5}50%{opacity:1}}
+@media (prefers-reduced-motion:reduce){
+  .skel{animation:none}
+  .drawer{transition:none}
+}
+</style>
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<div id="login">
+  <form class="card" id="loginForm" autocomplete="on">
+    <div class="logo">AXION <span>Desk</span></div>
+    <div class="muted">Private operator workspace</div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="UI password">
+    </div>
+    <button class="btn primary" id="loginBtn" type="submit">Sign in</button>
+    <div id="error" role="alert"></div>
+  </form>
+</div>
+
+<!-- ============ APP ============ -->
+<div id="app">
+  <header>
+    <div class="brand">AXION <span>Desk</span></div>
+
+    <div class="segmented" role="tablist" aria-label="Primary views">
+      <button type="button" role="tab" id="tabChat" aria-selected="true">Chat</button>
+      <button type="button" role="tab" id="tabJobs" aria-selected="false">Jobs</button>
+    </div>
+
+    <div class="controls">
+      <span class="ctl" id="chatModelWrap"><select id="model" aria-label="Chat model"></select></span>
+      <span class="pill" id="statusPill" data-state="idle"><span class="dot"></span><span id="pillText">Idle</span></span>
+      <button class="btn ghost sm" id="logout" type="button">Log out</button>
+    </div>
+  </header>
+
+  <div class="views">
+    <!-- ---------- CHAT ---------- -->
+    <section class="view active" id="view-chat" role="tabpanel" aria-label="Chat">
+      <main id="messages"><div class="thread" id="thread"></div></main>
+      <footer>
+        <div class="composer">
+          <textarea id="input" rows="1" placeholder="Ask Claude Code anything…" aria-label="Message"></textarea>
+          <button class="btn primary" id="send" type="button">Send</button>
+        </div>
+        <div class="status" id="status" role="status"></div>
+      </footer>
+    </section>
+
+    <!-- ---------- JOBS ---------- -->
+    <section class="view" id="view-jobs" role="tabpanel" aria-label="Jobs">
+      <div class="jobs-wrap">
+        <aside class="job-form-pane">
+          <form id="jobForm">
+            <div class="pane-head">
+              <h2>New job</h2>
+              <p>Create an automation job and optionally run it immediately.</p>
+            </div>
+
+            <div class="field">
+              <label for="jobType">Type</label>
+              <select id="jobType"></select>
+            </div>
+
+            <div id="jobFields"></div>
+
+            <div class="field">
+              <label for="jobModel">Model</label>
+              <span class="ctl" id="jobModelWrap"><select id="jobModel" aria-label="Job model"></select></span>
+            </div>
+
+            <label class="check">
+              <input type="checkbox" id="autoRun" checked>
+              <span>Auto-run after create</span>
+            </label>
+
+            <div class="notice" id="jobNotice" hidden></div>
+
+            <button class="btn primary" type="submit" id="createJob">Create job</button>
+            <div class="form-msg" id="jobFormMsg" role="alert"></div>
+          </form>
+        </aside>
+
+        <div class="jobs-main">
+          <div class="jobs-toolbar">
+            <span class="trade-strip">Paper mode · $10 cap</span>
+            <span class="jobs-msg" id="jobsMsg" role="status"></span>
+            <span class="spacer"></span>
+            <span class="jobs-count" id="jobsCount"></span>
+            <button class="btn ghost sm" id="refreshJobs" type="button">Refresh</button>
+          </div>
+          <div class="jobs-scroll" id="jobsList"></div>
+        </div>
+      </div>
+
+      <div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+      <aside class="drawer" id="jobDrawer" aria-hidden="true" aria-label="Job detail">
+        <div class="drawer-head">
+          <div style="min-width:0;flex:1">
+            <div class="drawer-title" id="drawerTitle">Job</div>
+            <div class="drawer-sub" id="drawerSub"></div>
+          </div>
+          <button class="btn ghost sm" id="drawerClose" type="button">Close</button>
+        </div>
+        <div class="drawer-body" id="drawerBody"></div>
+      </aside>
+    </section>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   Utilities
+   ============================================================ */
+const $ = (id) => document.getElementById(id);
+
+function el(tag, className, text){
+  const n = document.createElement(tag);
+  if (className) n.className = className;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+async function api(url, opts = {}){
+  const res = await fetch(url, {
+    credentials: "same-origin",
+    ...opts,
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+  });
+  const raw = await res.text();
+  let data = null;
+  if (raw) { try { data = JSON.parse(raw); } catch { data = { raw }; } }
+
+  if (!res.ok) {
+    // Session expiry anywhere in the app drops us back to the gate.
+    if (res.status === 401 && !url.endsWith("/api/login")) showLogin();
+    const msg = (data && (data.detail || data.error || data.message)) || `Request failed (${res.status})`;
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  return data || {};
+}
+
+async function copyText(text, btn){
+  const value = String(text == null ? "" : text);
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = value;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    if (btn) {
+      const prev = btn.textContent;
+      btn.textContent = "Copied";
+      setTimeout(() => { btn.textContent = prev; }, 1200);
+    }
+  } catch { /* clipboard unavailable — non-fatal */ }
+}
+
+/* JSON / value formatting ------------------------------------- */
+function pretty(v){
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  try { return JSON.stringify(v, null, 2); } catch { return String(v); }
+}
+
+function toDate(v){
+  if (v == null || v === "") return null;
+  if (typeof v === "number") return new Date(v < 1e12 ? v * 1000 : v);
+  const s = String(v);
+  if (/^\d+$/.test(s)) { const n = Number(s); return new Date(n < 1e12 ? n * 1000 : n); }
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function fmtRel(v){
+  const d = toDate(v);
+  if (!d) return "";
+  const diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 45) return "just now";
+  if (diff < 3600) return Math.floor(diff / 60) + "m ago";
+  if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
+  if (diff < 604800) return Math.floor(diff / 86400) + "d ago";
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function fmtAbs(v){
+  const d = toDate(v);
+  return d ? d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+}
+
+/* ============================================================
+   App state
+   ============================================================ */
+const state = {
+  authed: false,
+  tab: sessionStorage.getItem("axion.tab") === "jobs" ? "jobs" : "chat",
+  models: [],
+  chatBusy: false,
+  jobs: [],
+  selectedJobId: null,
+  drawerOpen: false,
+  detailSig: null,
+};
+
+/* ============================================================
+   Auth
+   ============================================================ */
+function showApp(){
+  state.authed = true;
+  $("login").style.display = "none";
+  $("app").classList.add("ready");
+  loadModels();
+  setTab(state.tab);
+  loadJobs({ silent: true });
+}
+
+function showLogin(){
+  state.authed = false;
+  $("app").classList.remove("ready");
+  $("login").style.display = "grid";
+  closeDrawer();
+}
+
+async function check(){
+  try { await api("/api/me"); showApp(); }
+  catch { showLogin(); }
+}
+
+async function login(e){
+  if (e) e.preventDefault();
+  $("error").textContent = "";
+  const btn = $("loginBtn");
+  btn.disabled = true;
+  try {
+    await api("/api/login", {
+      method: "POST",
+      body: JSON.stringify({ password: $("password").value }),
+    });
+    $("password").value = "";
+    showApp();
+  } catch (err) {
+    $("error").textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function logout(){
+  try { await api("/api/logout", { method: "POST" }); }
+  catch { /* even if it fails, drop local session view */ }
+  finally { showLogin(); }
+}
+
+/* ============================================================
+   Models (chat + job form)
+   ============================================================ */
+async function loadModels(){
+  let models = [];
+  try {
+    const d = await api("/api/models");
+    models = Array.isArray(d.models) ? d.models : (Array.isArray(d) ? d : []);
+  } catch {
+    models = [];
+    setStatus("Model list unavailable — enter a model id manually.");
+  }
+  state.models = models;
+  buildModelControl($("chatModelWrap"), "model", models, null);
+  buildModelControl($("jobModelWrap"), "jobModel", models, "Default");
+}
+
+/* Swaps between a populated <select> and a free-text fallback input. */
+function buildModelControl(wrap, id, models, defaultLabel){
+  if (!wrap) return;
+  const label = id === "model" ? "Chat model" : "Job model";
+  if (models.length) {
+    const sel = el("select");
+    sel.id = id;
+    sel.setAttribute("aria-label", label);
+    if (defaultLabel) {
+      const o = el("option", null, defaultLabel);
+      o.value = "";
+      sel.appendChild(o);
+    }
+    models.forEach((m) => {
+      const o = el("option", null, m.name || m.id);
+      o.value = m.id;
+      sel.appendChild(o);
+    });
+    wrap.replaceChildren(sel);
+  } else {
+    const inp = el("input");
+    inp.id = id;
+    inp.type = "text";
+    inp.placeholder = "model id";
+    inp.setAttribute("aria-label", label);
+    wrap.replaceChildren(inp);
+  }
+}
+
+/* ============================================================
+   Header status
+   ============================================================ */
+function setPill(stateName, text){
+  $("statusPill").dataset.state = stateName;
+  $("pillText").textContent = text;
+}
+function setStatus(text){ $("status").textContent = text || ""; }
+
+/* ============================================================
+   Tabs
+   ============================================================ */
+function setTab(tab){
+  state.tab = tab;
+  sessionStorage.setItem("axion.tab", tab);
+
+  $("tabChat").setAttribute("aria-selected", String(tab === "chat"));
+  $("tabJobs").setAttribute("aria-selected", String(tab === "jobs"));
+  $("view-chat").classList.toggle("active", tab === "chat");
+  $("view-jobs").classList.toggle("active", tab === "jobs");
+
+  if (tab === "jobs") {
+    loadJobs({ silent: true });
+  } else if (window.matchMedia("(min-width:900px)").matches) {
+    $("input").focus();
+  }
+}
+
+/* ============================================================
+   Chat
+   ============================================================ */
+function renderThreadEmpty(){
+  const thread = $("thread");
+  if (thread.children.length) return;
+  const box = el("div", "empty");
+  box.appendChild(el("strong", null, "No messages yet"));
+  box.appendChild(document.createTextNode("Ask Claude Code to write, plan, or run something."));
+  thread.appendChild(box);
+}
+
+function addMessage(role, text, model, stderr){
+  const thread = $("thread");
+  const empty = thread.querySelector(".empty");
+  if (empty) empty.remove();
+
+  const wrap = el("div", "msg " + role);
+
+  const meta = el("div", "meta");
+  meta.appendChild(el("span", null, role === "user" ? "You" : "Claude Code" + (model ? " · " + model : "")));
+  const copy = el("button", "copy", "Copy");
+  copy.type = "button";
+  copy.setAttribute("aria-label", "Copy message");
+  copy.onclick = () => copyText(text, copy);
+  meta.appendChild(copy);
+
+  const body = el("div", "body", text);
+  wrap.append(meta, body);
+
+  if (stderr) {
+    const d = el("details", "stderr");
+    d.appendChild(el("summary", null, "stderr"));
+    d.appendChild(el("pre", null, String(stderr)));
+    wrap.appendChild(d);
+  }
+
+  thread.appendChild(wrap);
+  const messages = $("messages");
+  messages.scrollTop = messages.scrollHeight;
+}
+
+async function send(){
+  if (state.chatBusy) return;
+  const ta = $("input");
+  const text = ta.value.trim();
+  if (!text) return;
+
+  state.chatBusy = true;
+  const sendBtn = $("send");
+  sendBtn.disabled = true;
+  sendBtn.textContent = "Sending…";
+  setStatus("Claude Code is working…");
+  setPill("working", "Working");
+
+  addMessage("user", text);
+  ta.value = "";
+  autoGrow(ta);
+
+  const model = ($("model") && $("model").value || "").trim();
+
+  try {
+    const d = await api("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({ message: text, model }),
+    });
+    addMessage("assistant", d.result || "(No text returned)", d.model || model, d.stderr);
+    setStatus("");
+    setPill("ready", "Ready");
+  } catch (err) {
+    addMessage("assistant", "Error: " + err.message);
+    setStatus("Request failed");
+    setPill("error", "Error");
+  } finally {
+    state.chatBusy = false;
+    sendBtn.disabled = false;
+    sendBtn.textContent = "Send";
+    ta.focus();
+  }
+}
+
+function autoGrow(ta){
+  ta.style.height = "auto";
+  ta.style.height = Math.min(ta.scrollHeight, 180) + "px";
+}
+
+/* ============================================================
+   Job type schema
+   ============================================================ */
+const JOB_TYPES = {
+  social: {
+    label: "Social post",
+    fields: [
+      { key: "brief", label: "Brief", type: "text", placeholder: "What to post about" },
+      { key: "platforms", label: "Platforms", type: "text", placeholder: "x, linkedin, instagram", hint: "Comma-separated" },
+    ],
+  },
+  affiliate: {
+    label: "Affiliate",
+    fields: [
+      { key: "offer", label: "Offer", type: "text", placeholder: "Product / program" },
+      { key: "audience", label: "Audience", type: "text", placeholder: "Who it is for" },
+    ],
+  },
+  trade: {
+    label: "Trade (paper)",
+    fields: [
+      { key: "symbols", label: "Symbols", type: "text", placeholder: "BTC, ETH", hint: "Comma-separated" },
+      { key: "horizon", label: "Horizon", type: "text", placeholder: "intraday, 1w" },
+    ],
+  },
+  yt_script: {
+    label: "YouTube script",
+    fields: [
+      { key: "niche", label: "Niche", type: "text", placeholder: "personal finance" },
+      { key: "topic", label: "Topic", type: "text", placeholder: "Video topic" },
+      { key: "minutes", label: "Minutes", type: "number", placeholder: "8" },
+    ],
+  },
+  yt_assets: {
+    label: "YouTube assets",
+    fields: [
+      { key: "topic", label: "Topic", type: "text", placeholder: "Video topic" },
+      { key: "script_summary", label: "Script summary", type: "textarea", placeholder: "Paste the script or a summary" },
+    ],
+  },
+  course_outline: {
+    label: "Course outline",
+    fields: [
+      { key: "topic", label: "Topic", type: "text", placeholder: "Course topic" },
+      { key: "audience", label: "Audience", type: "text", placeholder: "Beginners" },
+      { key: "platform", label: "Platform", type: "text", placeholder: "Teachable, YouTube" },
+    ],
+  },
+  job_search: {
+    label: "Job search",
+    fields: [
+      { key: "roles", label: "Roles", type: "text", placeholder: "Backend engineer, Platform engineer" },
+      { key: "location", label: "Location", type: "text", placeholder: "Remote (EU)" },
+      { key: "constraints", label: "Constraints", type: "text", placeholder: "No on-call, >$150k" },
+    ],
+  },
+  job_packet: {
+    label: "Job packet",
+    fields: [
+      { key: "role", label: "Role", type: "text", placeholder: "Senior Backend Engineer" },
+      { key: "company", label: "Company", type: "text", placeholder: "Acme" },
+      { key: "jd", label: "Job description", type: "textarea", placeholder: "Paste the JD" },
+      { key: "resume_facts", label: "Resume facts", type: "textarea", placeholder: "Bullets, metrics, links" },
+    ],
+  },
+  trade_live: {
+    label: "Trade (live)",
+    warning: "Requires approval; paper by default; $10 cap.",
+    fields: [
+      { key: "symbols", label: "Symbols", type: "text", placeholder: "BTC, ETH", hint: "Comma-separated" },
+      { key: "horizon", label: "Horizon", type: "text", placeholder: "intraday, 1w" },
+    ],
+  },
+};
+
+/* ============================================================
+   Job form
+   ============================================================ */
+function initJobForm(){
+  const sel = $("jobType");
+  Object.entries(JOB_TYPES).forEach(([key, def]) => {
+    const o = el("option", null, def.label || key);
+    o.value = key;
+    sel.appendChild(o);
+  });
+  sel.value = "social";
+  renderJobFields();
+}
+
+function renderJobFields(){
+  const type = $("jobType").value;
+  const def = JOB_TYPES[type];
+  const host = $("jobFields");
+  const frag = document.createDocumentFragment();
+
+  (def.fields || []).forEach((f) => {
+    const field = el("div", "field");
+    const label = el("label", null, f.label);
+    label.htmlFor = "f_" + f.key;
+    field.appendChild(label);
+
+    let input;
+    if (f.type === "textarea") {
+      input = el("textarea");
+      input.rows = 3;
+    } else {
+      input = el("input");
+      input.type = f.type === "number" ? "number" : "text";
+      if (f.type === "number") input.min = "1";
+    }
+    input.id = "f_" + f.key;
+    input.placeholder = f.placeholder || "";
+    field.appendChild(input);
+
+    if (f.hint) field.appendChild(el("div", "hint", f.hint));
+    frag.appendChild(field);
+  });
+
+  host.replaceChildren(frag);
+
+  const notice = $("jobNotice");
+  if (def.warning) { notice.textContent = def.warning; notice.hidden = false; }
+  else { notice.hidden = true; notice.textContent = ""; }
+}
+
+function buildPayload(type){
+  const def = JOB_TYPES[type];
+  const payload = {};
+  (def.fields || []).forEach((f) => {
+    const node = $("f_" + f.key);
+    if (!node) return;
+    const raw = node.value.trim();
+    if (f.type === "number") {
+      const n = Number(raw);
+      payload[f.key] = raw === "" || Number.isNaN(n) ? null : n;
+    } else {
+      payload[f.key] = raw;
+    }
+  });
+  return payload;
+}
+
+async function createJob(e){
+  e.preventDefault();
+  const btn = $("createJob");
+  const msg = $("jobFormMsg");
+  msg.textContent = "";
+
+  const type = $("jobType").value;
+  const payload = buildPayload(type);
+  const body = { type, payload, auto_run: $("autoRun").checked };
+  const model = ($("jobModel") && $("jobModel").value || "").trim();
+  if (model) body.model = model;
+
+  btn.disabled = true;
+  btn.textContent = "Creating…";
+  try {
+    const d = await api("/api/jobs", { method: "POST", body: JSON.stringify(body) });
+    const created = d.job || d;
+    const id = jobId(created);
+    await loadJobs({ silent: true });
+    if (id) openJob(id, { force: true });
+  } catch (err) {
+    msg.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Create job";
+  }
+}
+
+/* ============================================================
+   Jobs list + detail
+   ============================================================ */
+const jobId = (j) => String(j.id ?? j.job_id ?? j.jobId ?? j.uuid ?? "");
+const jobType = (j) => String(j.type ?? j.job_type ?? j.jobType ?? "job");
+const jobStatus = (j) => String(j.status ?? j.state ?? "unknown").toLowerCase();
+const jobCreated = (j) => j.created_at ?? j.createdAt ?? j.created ?? j.ts ?? j.timestamp ?? null;
+const ACTIVE_STATUSES = ["queued", "running", "pending", "in_progress", "starting"];
+const isActive = (j) => ACTIVE_STATUSES.includes(jobStatus(j));
+const shortId = (id) => (id.length <= 10 ? id : id.slice(0, 8) + "…");
+
+function badge(status){
+  return el("span", "badge " + status, status.replace(/_/g, " "));
+}
+
+function emptyState(title, sub){
+  const box = el("div", "empty");
+  box.appendChild(el("strong", null, title));
+  box.appendChild(document.createTextNode(sub));
+  return box;
+}
+
+function errorBlock(message){
+  const box = el("div", "empty");
+  box.appendChild(el("strong", null, "Could not load"));
+  box.appendChild(document.createTextNode(message));
+  return box;
+}
+
+function showJobsError(message){
+  const n = $("jobsMsg");
+  n.textContent = message || "";
+  if (message) setTimeout(() => { if (n.textContent === message) n.textContent = ""; }, 6000);
+}
+
+async function loadJobs(opts = {}){
+  try {
+    const d = await api("/api/jobs");
+    const list = Array.isArray(d) ? d : (Array.isArray(d.jobs) ? d.jobs : []);
+    state.jobs = list;
+    renderJobs();
+  } catch (err) {
+    if (!opts.silent) $("jobsList").replaceChildren(errorBlock(err.message));
+    else showJobsError(err.message);
+  }
+}
+
+function renderJobs(){
+  const host = $("jobsList");
+  const jobs = state.jobs;
+
+  $("jobsCount").textContent = jobs.length ? `${jobs.length} job${jobs.length === 1 ? "" : "s"}` : "";
+
+  if (!jobs.length) {
+    host.replaceChildren(emptyState("No jobs yet", "Create one with the form."));
+    return;
+  }
+
+  const list = el("div", "job-list");
+  jobs.forEach((job) => list.appendChild(jobRow(job)));
+  host.replaceChildren(list);
+}
+
+function jobRow(job){
+  const id = jobId(job);
+  const status = jobStatus(job);
+
+  const row = el("div", "job-row");
+  if (id && id === state.selectedJobId) row.classList.add("selected");
+
+  const main = el("div", "job-main");
+  const top = el("div", "job-top");
+
+  const idEl = el("span", "job-id", shortId(id) || "(no id)");
+  idEl.title = id;
+  top.appendChild(idEl);
+
+  if (id) {
+    const copy = el("button", "copy", "Copy");
+    copy.type = "button";
+    copy.title = "Copy job id";
+    copy.setAttribute("aria-label", "Copy job id");
+    copy.onclick = (e) => { e.stopPropagation(); copyText(id, copy); };
+    top.appendChild(copy);
+  }
+  top.appendChild(badge(status));
+
+  const sub = el("div", "job-sub");
+  const created = jobCreated(job);
+  sub.textContent = jobType(job) + (created ? " · " + fmtRel(created) : "");
+  if (created) sub.title = fmtAbs(created);
+
+  main.append(top, sub);
+
+  const actions = el("div", "job-actions");
+  const view = el("button", "btn ghost sm", "View");
+  view.type = "button";
+  view.onclick = (e) => { e.stopPropagation(); openJob(id, { force: true }); };
+
+  const run = el("button", "btn ghost sm", "Run");
+  run.type = "button";
+  run.disabled = !id || isActive(job);
+  run.onclick = (e) => { e.stopPropagation(); runJob(id); };
+
+  actions.append(view, run);
+  row.append(main, actions);
+
+  row.onclick = (e) => {
+    if (e.target.closest("button")) return;
+    if (id) openJob(id, { force: true });
+  };
+
+  return row;
+}
+
+async function runJob(id){
+  if (!id) return;
+  showJobsError("");
+  try {
+    await api(`/api/jobs/${encodeURIComponent(id)}/run`, { method: "POST" });
+    await loadJobs({ silent: true });
+    if (state.selectedJobId === id) openJob(id, { force: true });
+  } catch (err) {
+    showJobsError(err.message);
+  }
+}
+
+/* ---------- drawer ---------- */
+function openDrawer(){
+  state.drawerOpen = true;
+  $("jobDrawer").classList.add("open");
+  $("jobDrawer").setAttribute("aria-hidden", "false");
+  $("drawerBackdrop").hidden = false;
+}
+
+function closeDrawer(){
+  state.drawerOpen = false;
+  state.selectedJobId = null;
+  state.detailSig = null;
+  $("jobDrawer").classList.remove("open");
+  $("jobDrawer").setAttribute("aria-hidden", "true");
+  $("drawerBackdrop").hidden = true;
+  renderJobs();
+}
+
+function skeleton(){
+  const frag = document.createDocumentFragment();
+  frag.appendChild(el("div", "skel w40"));
+  frag.appendChild(el("div", "skel w80"));
+  frag.appendChild(el("div", "skel w60"));
+  frag.appendChild(el("div", "skel w80"));
+  return frag;
+}
+
+async function openJob(id, opts = {}){
+  if (!id) return;
+  state.selectedJobId = id;
+  openDrawer();
+  renderJobs();
+
+  const body = $("drawerBody");
+  if (opts.force !== false) body.replaceChildren(skeleton());
+
+  try {
+    const d = await api("/api/jobs/" + encodeURIComponent(id));
+    const job = d.job || d;
+    if (state.selectedJobId !== id) return; // user moved on
+
+    // Avoid re-rendering (and collapsing <details>) while polling an unchanged job.
+    const sig = jobStatus(job) + "|" + (job.updated_at ?? job.updatedAt ?? job.finished_at ?? job.result ?? "");
+    if (!opts.force && state.detailSig === sig) return;
+    state.detailSig = sig;
+
+    const scroll = body.scrollTop;
+    renderJobDetail(job, id);
+    body.scrollTop = scroll;
+  } catch (err) {
+    if (state.selectedJobId === id) body.replaceChildren(errorBlock(err.message));
+  }
+}
+
+function section(title, contentEl, copyValue){
+  const s = el("div", "section");
+  const head = el("div", "section-head");
+  head.appendChild(el("span", null, title));
+  if (copyValue != null && copyValue !== "") {
+    const b = el("button", "copy", "Copy");
+    b.type = "button";
+    b.setAttribute("aria-label", "Copy " + title);
+    b.onclick = () => copyText(copyValue, b);
+    head.appendChild(b);
+  }
+  s.append(head, contentEl);
+  return s;
+}
+
+function preBlock(text){
+  return el("pre", null, text);
+}
+
+function collapsible(title, text){
+  const d = el("details", "section");
+  const sum = el("summary", "section-head");
+  sum.appendChild(el("span", null, title));
+  d.append(sum, preBlock(text));
+  return d;
+}
+
+function renderJobDetail(job, id){
+  $("drawerTitle").textContent = (shortId(id) || "Job") + " · " + jobType(job);
+  const created = jobCreated(job);
+  $("drawerSub").textContent = jobStatus(job).replace(/_/g, " ") + (created ? " · created " + fmtAbs(created) : "");
+
+  const body = $("drawerBody");
+  const frag = document.createDocumentFragment();
+
+  // status row + run control
+  const statusRow = el("div", "drawer-status");
+  statusRow.appendChild(badge(jobStatus(job)));
+  if (isActive(job)) {
+    statusRow.appendChild(el("span", "hint", "Job is " + jobStatus(job).replace(/_/g, " ") + "…"));
+  } else {
+    const run = el("button", "btn ghost sm", "Run again");
+    run.type = "button";
+    run.onclick = () => runJob(id);
+    statusRow.appendChild(run);
+  }
+  frag.appendChild(statusRow);
+
+  const payloadText = pretty(job.payload);
+  frag.appendChild(section("Payload", preBlock(payloadText || "(empty)"), payloadText));
+
+  if (job.result !== undefined && job.result !== null && job.result !== "") {
+    const resultText = pretty(job.result);
+    frag.appendChild(section("Result", preBlock(resultText), resultText));
+  }
+
+  if (job.stdout) frag.appendChild(collapsible("stdout", pretty(job.stdout)));
+  if (job.stderr) frag.appendChild(collapsible("stderr", pretty(job.stderr)));
+  if (job.error) frag.appendChild(section("Error", preBlock(pretty(job.error))));
+
+  frag.appendChild(collapsible("Raw JSON", pretty(job)));
+
+  body.replaceChildren(frag);
+}
+
+/* ============================================================
+   Polling — only while the Jobs view has work in flight
+   ============================================================ */
+function tick(){
+  if (!state.authed || state.tab !== "jobs") return;
+  const hasActive = state.jobs.some(isActive);
+  if (!hasActive) return;
+
+  loadJobs({ silent: true });
+
+  if (state.drawerOpen && state.selectedJobId) {
+    const current = state.jobs.find((j) => jobId(j) === state.selectedJobId);
+    if (current && isActive(current)) openJob(state.selectedJobId);
+  }
+}
+
+/* ============================================================
+   Wiring
+   ============================================================ */
+$("loginForm").addEventListener("submit", login);
+$("logout").addEventListener("click", logout);
+
+$("tabChat").addEventListener("click", () => setTab("chat"));
+$("tabJobs").addEventListener("click", () => setTab("jobs"));
+
+$("send").addEventListener("click", send);
+$("input").addEventListener("input", (e) => autoGrow(e.target));
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+$("jobType").addEventListener("change", renderJobFields);
+$("jobForm").addEventListener("submit", createJob);
+$("refreshJobs").addEventListener("click", () => loadJobs());
+$("drawerClose").addEventListener("click", closeDrawer);
+$("drawerBackdrop").addEventListener("click", closeDrawer);
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && state.drawerOpen) closeDrawer();
+});
+
+/* ---------- boot ---------- */
+initJobForm();
+renderThreadEmpty();
+setInterval(tick, 5000);
+check();
+</script>
+</body>
+</html>
