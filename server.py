@@ -154,9 +154,16 @@ async def messages(request:Request,authorization:Optional[str]=Header(default=No
     b=await request.json(); u=await gateway_call(b)
     if u.status_code>=400:
         try: content=u.json()
-        except: content={'error':u.text}
+        except Exception: content={'error':{'type':'gateway_error','message':f'Gateway returned HTTP {u.status_code}: {u.text[:2000]}'}}
         return JSONResponse(status_code=u.status_code,content=content)
-    d=u.json(); ch=(d.get('choices') or [{}])[0]; return JSONResponse(oa_to_anth(ch.get('message') or {},b.get('model') or DEFAULT_MODEL,d.get('usage') or {}))
+    try: d=u.json()
+    except Exception:
+        return JSONResponse(status_code=502,content={'error':{'type':'invalid_gateway_response','message':f'Gateway returned a non-JSON response. HTTP {u.status_code}. Body: {u.text[:2000]}'}})
+    choices=d.get('choices') or []
+    if not choices:
+        return JSONResponse(status_code=502,content={'error':{'type':'invalid_gateway_response','message':'Gateway JSON contained no choices.','response':d}})
+    message=choices[0].get('message') or {}
+    return JSONResponse(oa_to_anth(message,b.get('model') or DEFAULT_MODEL,d.get('usage') or {}))
 async def tg_api(method,payload=None):
     url=f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}"
     async with httpx.AsyncClient(timeout=TELEGRAM_POLL_TIMEOUT+10) as c:
