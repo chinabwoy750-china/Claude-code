@@ -18,6 +18,9 @@ TELEGRAM_BOT_TOKEN=os.getenv('TELEGRAM_BOT_TOKEN','')
 TELEGRAM_ALLOWED_CHAT_ID=os.getenv('TELEGRAM_ALLOWED_CHAT_ID','')
 TELEGRAM_POLL_TIMEOUT=int(os.getenv('TELEGRAM_POLL_TIMEOUT','30'))
 app=FastAPI(title='Claude Code Web')
+telegram_task = None
+telegram_offset = None
+telegram_model_by_chat = {}
 app.mount('/static',StaticFiles(directory='/app/static'),name='static')
 
 def sig(v): return hmac.new(SESSION_SECRET.encode(),v.encode(),hashlib.sha256).hexdigest()
